@@ -9,7 +9,7 @@ require (
 	github.com/dustin/go-humanize v1.0.0
 	github.com/elgris/jsondiff v0.0.0-20160530203242-765b5c24c302
 	github.com/fsnotify/fsnotify v1.4.9
-	github.com/gabriel-vasile/mimetype v1.2.0
+	github.com/gabriel-vasile/mimetype v1.3.0
 	github.com/go-bindata/go-bindata/v3 v3.1.3
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/ipfs/go-bitswap v0.3.3
@@ -103,7 +103,11 @@ require (
 	golang.org/x/crypto v0.0.0-20210322153248-0c34fe9e7dc2
 	golang.org/x/lint v0.0.0-20201208152925-83fdc39ff7b5 // indirect
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
+  <<<<<<< dependabot/go_modules/github.com/gabriel-vasile/mimetype-1.3.0
+	golang.org/x/sys v0.0.0-20210423082822-04245dca01da
+  =======
 	golang.org/x/sys v0.0.0-20210426080607-c94f62235c83
+  >>>>>>> master
 )
 
 go 1.14
