@@ -4,18 +4,16 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/ipfs/go-ipfs/core"
 	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
 	tar "github.com/ipfs/go-ipfs/tar"
 
-	"gx/ipfs/QmZErC2Ay6WuGi96CPg316PwitdwgLo6RxZRqVjJjRj2MR/go-path"
-	"gx/ipfs/QmaAP56JAwdjwisPTu4yx17whcjTr6y5JCSCF77Y1rahWV/go-ipfs-cmds"
-	dag "gx/ipfs/QmdV35UHnL1FM52baPkeUo6u7Fxm2CRUkPTLRPxeF8a4Ap/go-merkledag"
-	"gx/ipfs/Qmde5VP1qUkyQXKCfmEUA7bP64V2HAptbJ7phuPp7jXWwg/go-ipfs-cmdkit"
+	"github.com/ipfs/go-ipfs-cmds"
+	dag "github.com/ipfs/go-merkledag"
+	path "github.com/ipfs/interface-go-ipfs-core/path"
 )
 
 var TarCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "Utility functions for tar files in ipfs.",
 	},
 
@@ -26,7 +24,7 @@ var TarCmd = &cmds.Command{
 }
 
 var tarAddCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "Import a tar file into ipfs.",
 		ShortDescription: `
 'ipfs tar add' will parse a tar file and create a merkledag structure to
@@ -34,11 +32,16 @@ represent it.
 `,
 	},
 
-	Arguments: []cmdkit.Argument{
-		cmdkit.FileArg("file", true, false, "Tar file to add.").EnableStdin(),
+	Arguments: []cmds.Argument{
+		cmds.FileArg("file", true, false, "Tar file to add.").EnableStdin(),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
-		nd, err := cmdenv.GetNode(env)
+		api, err := cmdenv.GetApi(env, req)
+		if err != nil {
+			return err
+		}
+
+		enc, err := cmdenv.GetCidEncoder(req)
 		if err != nil {
 			return err
 		}
@@ -49,7 +52,7 @@ represent it.
 			return err
 		}
 
-		node, err := tar.ImportTar(req.Context, file, nd.DAG)
+		node, err := tar.ImportTar(req.Context, file, api.Dag())
 		if err != nil {
 			return err
 		}
@@ -58,7 +61,7 @@ represent it.
 
 		return cmds.EmitOnce(res, &AddEvent{
 			Name: it.Name(),
-			Hash: c.String(),
+			Hash: enc.Encode(c),
 		})
 	},
 	Type: AddEvent{},
@@ -71,28 +74,23 @@ represent it.
 }
 
 var tarCatCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "Export a tar file from IPFS.",
 		ShortDescription: `
 'ipfs tar cat' will export a tar file from a previously imported one in IPFS.
 `,
 	},
 
-	Arguments: []cmdkit.Argument{
-		cmdkit.StringArg("path", true, false, "ipfs path of archive to export.").EnableStdin(),
+	Arguments: []cmds.Argument{
+		cmds.StringArg("path", true, false, "ipfs path of archive to export.").EnableStdin(),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
-		nd, err := cmdenv.GetNode(env)
+		api, err := cmdenv.GetApi(env, req)
 		if err != nil {
 			return err
 		}
 
-		p, err := path.ParsePath(req.Arguments[0])
-		if err != nil {
-			return err
-		}
-
-		root, err := core.Resolve(req.Context, nd.Namesys, nd.Resolver, p)
+		root, err := api.ResolveNode(req.Context, path.New(req.Arguments[0]))
 		if err != nil {
 			return err
 		}
@@ -102,7 +100,7 @@ var tarCatCmd = &cmds.Command{
 			return dag.ErrNotProtobuf
 		}
 
-		r, err := tar.ExportTar(req.Context, rootpb, nd.DAG)
+		r, err := tar.ExportTar(req.Context, rootpb, api.Dag())
 		if err != nil {
 			return err
 		}

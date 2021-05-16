@@ -5,12 +5,12 @@ import (
 
 	"github.com/ipfs/go-ipfs/namesys"
 
-	ipns "gx/ipfs/QmPrt2JqvtFcgMBmYBjtZ5jFzq6HoFXy8PTwLb2Dpm2cGf/go-ipns"
-	tu "gx/ipfs/QmPuhRE325DR8ChNcFtgd6F1eANCHy1oohXZPpYop4xsK6/go-testutil"
+	ipns "github.com/ipfs/go-ipns"
+	"github.com/libp2p/go-libp2p-core/test"
 )
 
 func TestKeyTranslation(t *testing.T) {
-	pid := tu.RandPeerIDFatal(t)
+	pid := test.RandPeerIDFatal(t)
 	pkname := namesys.PkKeyForID(pid)
 	ipnsname := ipns.RecordKey(pid)
 

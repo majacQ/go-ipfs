@@ -7,14 +7,15 @@ import (
 	"io"
 	"strings"
 
-	core "github.com/ipfs/go-ipfs/core"
 	cmdenv "github.com/ipfs/go-ipfs/core/commands/cmdenv"
 
-	cid "gx/ipfs/QmR8BauakNcBa3RbE4nbQu76PDiJgoQgz8AJdhJuiU4TAw/go-cid"
-	path "gx/ipfs/QmZErC2Ay6WuGi96CPg316PwitdwgLo6RxZRqVjJjRj2MR/go-path"
-	cmds "gx/ipfs/QmaAP56JAwdjwisPTu4yx17whcjTr6y5JCSCF77Y1rahWV/go-ipfs-cmds"
-	ipld "gx/ipfs/QmcKKBwfz6FyQdHR2jsXrrF6XeSBXYL86anmWNewpFpoF5/go-ipld-format"
-	cmdkit "gx/ipfs/Qmde5VP1qUkyQXKCfmEUA7bP64V2HAptbJ7phuPp7jXWwg/go-ipfs-cmdkit"
+	cid "github.com/ipfs/go-cid"
+	cidenc "github.com/ipfs/go-cidutil/cidenc"
+	cmds "github.com/ipfs/go-ipfs-cmds"
+	ipld "github.com/ipfs/go-ipld-format"
+	merkledag "github.com/ipfs/go-merkledag"
+	iface "github.com/ipfs/interface-go-ipfs-core"
+	path "github.com/ipfs/interface-go-ipfs-core/path"
 )
 
 var refsEncoderMap = cmds.EncoderMap{
@@ -43,7 +44,7 @@ const (
 
 // RefsCmd is the `ipfs refs` command
 var RefsCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "List links (references) from an object.",
 		ShortDescription: `
 Lists the hashes of all the links an IPFS or IPNS object(s) contains,
@@ -57,15 +58,15 @@ NOTE: List all references recursively by using the flag '-r'.
 	Subcommands: map[string]*cmds.Command{
 		"local": RefsLocalCmd,
 	},
-	Arguments: []cmdkit.Argument{
-		cmdkit.StringArg("ipfs-path", true, true, "Path to the object(s) to list refs from.").EnableStdin(),
+	Arguments: []cmds.Argument{
+		cmds.StringArg("ipfs-path", true, true, "Path to the object(s) to list refs from.").EnableStdin(),
 	},
-	Options: []cmdkit.Option{
-		cmdkit.StringOption(refsFormatOptionName, "Emit edges with given format. Available tokens: <src> <dst> <linkname>.").WithDefault("<dst>"),
-		cmdkit.BoolOption(refsEdgesOptionName, "e", "Emit edge format: `<from> -> <to>`."),
-		cmdkit.BoolOption(refsUniqueOptionName, "u", "Omit duplicate refs from output."),
-		cmdkit.BoolOption(refsRecursiveOptionName, "r", "Recursively list links of child nodes."),
-		cmdkit.IntOption(refsMaxDepthOptionName, "Only for recursive refs, limits fetch and listing to the given depth").WithDefault(-1),
+	Options: []cmds.Option{
+		cmds.StringOption(refsFormatOptionName, "Emit edges with given format. Available tokens: <src> <dst> <linkname>.").WithDefault("<dst>"),
+		cmds.BoolOption(refsEdgesOptionName, "e", "Emit edge format: `<from> -> <to>`."),
+		cmds.BoolOption(refsUniqueOptionName, "u", "Omit duplicate refs from output."),
+		cmds.BoolOption(refsRecursiveOptionName, "r", "Recursively list links of child nodes."),
+		cmds.IntOption(refsMaxDepthOptionName, "Only for recursive refs, limits fetch and listing to the given depth").WithDefault(-1),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
 		err := req.ParseBodyArgs()
@@ -74,7 +75,12 @@ NOTE: List all references recursively by using the flag '-r'.
 		}
 
 		ctx := req.Context
-		n, err := cmdenv.GetNode(env)
+		api, err := cmdenv.GetApi(env, req)
+		if err != nil {
+			return err
+		}
+
+		enc, err := cmdenv.GetCidEncoder(req)
 		if err != nil {
 			return err
 		}
@@ -97,14 +103,15 @@ NOTE: List all references recursively by using the flag '-r'.
 			format = "<src> -> <dst>"
 		}
 
-		objs, err := objectsForPaths(ctx, n, req.Arguments)
+		// TODO: use session for resolving as well.
+		objs, err := objectsForPaths(ctx, api, req.Arguments)
 		if err != nil {
 			return err
 		}
 
 		rw := RefWriter{
 			res:      res,
-			DAG:      n.DAG,
+			DAG:      merkledag.NewSession(ctx, api.Dag()),
 			Ctx:      ctx,
 			Unique:   unique,
 			PrintFmt: format,
@@ -112,7 +119,7 @@ NOTE: List all references recursively by using the flag '-r'.
 		}
 
 		for _, o := range objs {
-			if _, err := rw.WriteRefs(o); err != nil {
+			if _, err := rw.WriteRefs(o, enc); err != nil {
 				if err := res.Emit(&RefWrapper{Err: err.Error()}); err != nil {
 					return err
 				}
@@ -126,7 +133,7 @@ NOTE: List all references recursively by using the flag '-r'.
 }
 
 var RefsLocalCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "List all local references.",
 		ShortDescription: `
 Displays the hashes of all local objects.
@@ -159,21 +166,16 @@ Displays the hashes of all local objects.
 	Type:     RefWrapper{},
 }
 
-func objectsForPaths(ctx context.Context, n *core.IpfsNode, paths []string) ([]ipld.Node, error) {
-	objects := make([]ipld.Node, len(paths))
+func objectsForPaths(ctx context.Context, n iface.CoreAPI, paths []string) ([]cid.Cid, error) {
+	roots := make([]cid.Cid, len(paths))
 	for i, sp := range paths {
-		p, err := path.ParsePath(sp)
+		o, err := n.ResolvePath(ctx, path.New(sp))
 		if err != nil {
 			return nil, err
 		}
-
-		o, err := core.Resolve(ctx, n.Namesys, n.Resolver, p)
-		if err != nil {
-			return nil, err
-		}
-		objects[i] = o
+		roots[i] = o.Cid()
 	}
-	return objects, nil
+	return roots, nil
 }
 
 type RefWrapper struct {
@@ -183,7 +185,7 @@ type RefWrapper struct {
 
 type RefWriter struct {
 	res cmds.ResponseEmitter
-	DAG ipld.DAGService
+	DAG ipld.NodeGetter
 	Ctx context.Context
 
 	Unique   bool
@@ -194,11 +196,15 @@ type RefWriter struct {
 }
 
 // WriteRefs writes refs of the given object to the underlying writer.
-func (rw *RefWriter) WriteRefs(n ipld.Node) (int, error) {
-	return rw.writeRefsRecursive(n, 0)
+func (rw *RefWriter) WriteRefs(c cid.Cid, enc cidenc.Encoder) (int, error) {
+	n, err := rw.DAG.Get(rw.Ctx, c)
+	if err != nil {
+		return 0, err
+	}
+	return rw.writeRefsRecursive(n, 0, enc)
 }
 
-func (rw *RefWriter) writeRefsRecursive(n ipld.Node, depth int) (int, error) {
+func (rw *RefWriter) writeRefsRecursive(n ipld.Node, depth int, enc cidenc.Encoder) (int, error) {
 	nc := n.Cid()
 
 	var count int
@@ -228,7 +234,7 @@ func (rw *RefWriter) writeRefsRecursive(n ipld.Node, depth int) (int, error) {
 
 		// Write this node if not done before (or !Unique)
 		if shouldWrite {
-			if err := rw.WriteEdge(nc, lc, n.Links()[i].Name); err != nil {
+			if err := rw.WriteEdge(nc, lc, n.Links()[i].Name, enc); err != nil {
 				return count, err
 			}
 			count++
@@ -240,7 +246,7 @@ func (rw *RefWriter) writeRefsRecursive(n ipld.Node, depth int) (int, error) {
 		// Note when !Unique, branches are always considered
 		// unexplored and only depth limits apply.
 		if goDeeper {
-			c, err := rw.writeRefsRecursive(nd, depth+1)
+			c, err := rw.writeRefsRecursive(nd, depth+1, enc)
 			count += c
 			if err != nil {
 				return count, err
@@ -309,7 +315,7 @@ func (rw *RefWriter) visit(c cid.Cid, depth int) (bool, bool) {
 }
 
 // Write one edge
-func (rw *RefWriter) WriteEdge(from, to cid.Cid, linkname string) error {
+func (rw *RefWriter) WriteEdge(from, to cid.Cid, linkname string, enc cidenc.Encoder) error {
 	if rw.Ctx != nil {
 		select {
 		case <-rw.Ctx.Done(): // just in case.
@@ -322,11 +328,11 @@ func (rw *RefWriter) WriteEdge(from, to cid.Cid, linkname string) error {
 	switch {
 	case rw.PrintFmt != "":
 		s = rw.PrintFmt
-		s = strings.Replace(s, "<src>", from.String(), -1)
-		s = strings.Replace(s, "<dst>", to.String(), -1)
+		s = strings.Replace(s, "<src>", enc.Encode(from), -1)
+		s = strings.Replace(s, "<dst>", enc.Encode(to), -1)
 		s = strings.Replace(s, "<linkname>", linkname, -1)
 	default:
-		s += to.String()
+		s += enc.Encode(to)
 	}
 
 	return rw.res.Emit(&RefWrapper{Ref: s})
