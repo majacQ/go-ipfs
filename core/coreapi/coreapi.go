@@ -17,32 +17,35 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	bserv "github.com/ipfs/go-blockservice"
+	"github.com/ipfs/go-dagwriter"
+	bsdagwriter "github.com/ipfs/go-dagwriter/impl/blockservice"
+	"github.com/ipfs/go-fetcher"
+	blockstore "github.com/ipfs/go-ipfs-blockstore"
+	exchange "github.com/ipfs/go-ipfs-exchange-interface"
+	offlinexch "github.com/ipfs/go-ipfs-exchange-offline"
+	pin "github.com/ipfs/go-ipfs-pinner"
+	provider "github.com/ipfs/go-ipfs-provider"
+	offlineroute "github.com/ipfs/go-ipfs-routing/offline"
+	ipld "github.com/ipfs/go-ipld-format"
+	dag "github.com/ipfs/go-merkledag"
+	"github.com/ipfs/go-path/resolver"
+	coreiface "github.com/ipfs/interface-go-ipfs-core"
+	"github.com/ipfs/interface-go-ipfs-core/options"
+	ci "github.com/libp2p/go-libp2p-core/crypto"
+	p2phost "github.com/libp2p/go-libp2p-core/host"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	pstore "github.com/libp2p/go-libp2p-core/peerstore"
+	routing "github.com/libp2p/go-libp2p-core/routing"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	record "github.com/libp2p/go-libp2p-record"
+
 	"github.com/ipfs/go-ipfs/core"
+	"github.com/ipfs/go-ipfs/core/node"
 	"github.com/ipfs/go-ipfs/namesys"
-	"github.com/ipfs/go-ipfs/pin"
 	"github.com/ipfs/go-ipfs/repo"
-
-	coreiface "github.com/ipfs/go-ipfs/core/coreapi/interface"
-	"github.com/ipfs/go-ipfs/core/coreapi/interface/options"
-
-	ci "gx/ipfs/QmNiJiXwWE3kRhZrC5ej3kSjWHm337pYfhjLGSCDNKJP2s/go-libp2p-crypto"
-	"gx/ipfs/QmP2g3VxmC7g7fyRJDj1VJ72KHZbJ9UW24YjSWEj1XTb4H/go-ipfs-exchange-interface"
-	pstore "gx/ipfs/QmPiemjiKBC9VA7vZF82m4x1oygtg2c2YVqag8PX7dN1BD/go-libp2p-peerstore"
-	ipld "gx/ipfs/QmRL22E4paat7ky7vx9MLpR97JHHbFPrg3ytFQw6qp1y1s/go-ipld-format"
-	"gx/ipfs/QmS2aqUZLJp8kF1ihE5rvDGE5LvmKDPnx32w9Z1BW9xLV5/go-ipfs-blockstore"
-	"gx/ipfs/QmTiRqrF5zkdZyrdsL5qndG1UbeWi8k8N2pYxCtXWrahR2/go-libp2p-routing"
-	bserv "gx/ipfs/QmVKQHuzni68SWByzJgBUCwHvvr4TWiXfutNWWwpZpp4rE/go-blockservice"
-	pubsub "gx/ipfs/QmVRxA4J3UPQpw74dLrQ6NJkfysCA1H4GU28gVpXQt9zMU/go-libp2p-pubsub"
-	offlineroute "gx/ipfs/QmVZ6cQXHoTQja4oo9GhhHZi7dThi4x98mRKgGtKnTy37u/go-ipfs-routing/offline"
-	"gx/ipfs/QmY5Grm8pJdiSSVsYxx4uNRgweY72EmYwuSDbRnbFok3iY/go-libp2p-peer"
-	offlinexch "gx/ipfs/QmYZwey1thDTynSrvd6qQkX24UpTka6TFhQ2v569UpoqxD/go-ipfs-exchange-offline"
-	p2phost "gx/ipfs/QmaoXrM4Z41PD48JY36YqQGKQpLGjyLA2cKcLsES7YddAq/go-libp2p-host"
-	dag "gx/ipfs/Qmb2UEG2TAeVrEJSjqsZF7Y2he7wRDkrdt6c3bECxwZf4k/go-merkledag"
-	logging "gx/ipfs/QmcuXC5cxs79ro2cUuHs4HQ2bkDLJUYokwL8aivcX6HW3C/go-log"
-	record "gx/ipfs/QmfARXVCzpwFXQdepAJZuqyNDgV9doEsMnVCo1ssmuSe1U/go-libp2p-record"
 )
-
-var log = logging.Logger("core/coreapi")
 
 type CoreAPI struct {
 	nctx context.Context
@@ -55,16 +58,20 @@ type CoreAPI struct {
 	baseBlocks blockstore.Blockstore
 	pinning    pin.Pinner
 
-	blocks bserv.BlockService
-	dag    ipld.DAGService
-
+	blocks          bserv.BlockService
+	dag             ipld.DAGService
+	fetcherFactory  fetcher.Factory
+	dagWriter       dagwriter.DagWritingService
+	resolver        *resolver.Resolver
 	peerstore       pstore.Peerstore
 	peerHost        p2phost.Host
 	recordValidator record.Validator
 	exchange        exchange.Interface
 
 	namesys namesys.NameSystem
-	routing routing.IpfsRouting
+	routing routing.Routing
+
+	provider provider.System
 
 	pubSub *pubsub.PubSub
 
@@ -101,6 +108,19 @@ func (api *CoreAPI) Dag() coreiface.APIDagService {
 	return &dagAPI{
 		api.dag,
 		api,
+	}
+}
+
+type nodeAPI struct {
+	fetcher.Factory
+	dagwriter.DagWritingService
+}
+
+// Node returns the Node interface implementation backed by the go-ipfs node
+func (api *CoreAPI) Node() coreiface.NodeAPI {
+	return &nodeAPI{
+		api.fetcherFactory,
+		api.dagWriter,
 	}
 }
 
@@ -164,8 +184,10 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 		baseBlocks: n.BaseBlocks,
 		pinning:    n.Pinning,
 
-		blocks: n.Blocks,
-		dag:    n.DAG,
+		blocks:         n.Blocks,
+		dag:            n.DAG,
+		resolver:       n.Resolver,
+		fetcherFactory: n.FetcherFactory,
 
 		peerstore:       n.Peerstore,
 		peerHost:        n.PeerHost,
@@ -174,14 +196,18 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 		exchange:        n.Exchange,
 		routing:         n.Routing,
 
+		provider: n.Provider,
+
 		pubSub: n.PubSub,
 
 		nd:         n,
 		parentOpts: settings,
 	}
 
+	subApi.dagWriter = bsdagwriter.NewDagWriter(subApi.blocks)
+
 	subApi.checkOnline = func(allowOffline bool) error {
-		if !n.OnlineMode() && !allowOffline {
+		if !n.IsOnline && !allowOffline {
 			return coreiface.ErrOffline
 		}
 		return nil
@@ -202,7 +228,7 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 
 		cs := cfg.Ipns.ResolveCacheSize
 		if cs == 0 {
-			cs = core.DefaultIpnsCacheSize
+			cs = node.DefaultIpnsCacheSize
 		}
 		if cs < 0 {
 			return nil, fmt.Errorf("cannot specify negative resolve cache size")
@@ -210,6 +236,7 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 
 		subApi.routing = offlineroute.NewOfflineRouter(subApi.repo.Datastore(), subApi.recordValidator)
 		subApi.namesys = namesys.NewNameSystem(subApi.routing, subApi.repo.Datastore(), cs)
+		subApi.provider = provider.NewOfflineProvider()
 
 		subApi.peerstore = nil
 		subApi.peerHost = nil

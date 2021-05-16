@@ -1,4 +1,4 @@
-// +build linux darwin freebsd netbsd openbsd
+// +build linux darwin freebsd
 // +build !nofuse
 
 package readonly
@@ -10,17 +10,17 @@ import (
 	"os"
 	"syscall"
 
+	fuse "bazil.org/fuse"
+	fs "bazil.org/fuse/fs"
+	"github.com/ipfs/go-cid"
 	core "github.com/ipfs/go-ipfs/core"
-	ft "gx/ipfs/QmQ1JnYpnzkaurjW1yxkQxC2w3K1PorNE1nv1vaP5Le7sq/go-unixfs"
-	uio "gx/ipfs/QmQ1JnYpnzkaurjW1yxkQxC2w3K1PorNE1nv1vaP5Le7sq/go-unixfs/io"
-	path "gx/ipfs/QmWqh9oob7ZHQRwU5CdTqpnC8ip8BEkFNrwXRxeNo5Y7vA/go-path"
-	mdag "gx/ipfs/Qmb2UEG2TAeVrEJSjqsZF7Y2he7wRDkrdt6c3bECxwZf4k/go-merkledag"
-
-	ipld "gx/ipfs/QmRL22E4paat7ky7vx9MLpR97JHHbFPrg3ytFQw6qp1y1s/go-ipld-format"
-	fuse "gx/ipfs/QmSJBsmLP1XMjv8hxYg2rUMdPDB7YUpyBo9idjrJ6Cmq6F/fuse"
-	fs "gx/ipfs/QmSJBsmLP1XMjv8hxYg2rUMdPDB7YUpyBo9idjrJ6Cmq6F/fuse/fs"
-	lgbl "gx/ipfs/QmWZnkipEJbsdUDhgTGBnKAN1iHM2WDMNqsXHyAuaAiCgo/go-libp2p-loggables"
-	logging "gx/ipfs/QmcuXC5cxs79ro2cUuHs4HQ2bkDLJUYokwL8aivcX6HW3C/go-log"
+	ipld "github.com/ipfs/go-ipld-format"
+	logging "github.com/ipfs/go-log"
+	mdag "github.com/ipfs/go-merkledag"
+	path "github.com/ipfs/go-path"
+	ft "github.com/ipfs/go-unixfs"
+	uio "github.com/ipfs/go-unixfs/io"
+	cidlink "github.com/ipld/go-ipld-prime/linking/cid"
 )
 
 var log = logging.Logger("fuse/ipfs")
@@ -66,20 +66,41 @@ func (s *Root) Lookup(ctx context.Context, name string) (fs.Node, error) {
 		return nil, fuse.ENOENT
 	}
 
-	nd, err := s.Ipfs.Resolver.ResolvePath(ctx, p)
+	nd, ndLnk, err := s.Ipfs.Resolver.ResolvePath(ctx, p)
 	if err != nil {
 		// todo: make this error more versatile.
 		return nil, fuse.ENOENT
 	}
 
-	switch nd := nd.(type) {
-	case *mdag.ProtoNode, *mdag.RawNode:
-		return &Node{Ipfs: s.Ipfs, Nd: nd}, nil
-	default:
-		log.Error("fuse node was not a protobuf node")
-		return nil, fuse.ENOTSUP
+	cidLnk, ok := ndLnk.(cidlink.Link)
+	if !ok {
+		log.Debugf("non-cidlink returned from ResolvePath: %v", ndLnk)
+		return nil, fuse.ENOENT
 	}
 
+	// convert ipld-prime node to universal node
+	blk, err := s.Ipfs.Blockstore.Get(cidLnk.Cid)
+	if err != nil {
+		log.Debugf("fuse failed to retrieve block: %v: %s", cidLnk, err)
+		return nil, fuse.ENOENT
+	}
+
+	var fnd ipld.Node
+	switch cidLnk.Cid.Prefix().Codec {
+	case cid.DagProtobuf:
+		fnd, err = mdag.ProtoNodeConverter(blk, nd)
+	case cid.Raw:
+		fnd, err = mdag.RawNodeConverter(blk, nd)
+	default:
+		log.Error("fuse node was not a protobuf node")
+		return nil, fuse.ENOENT
+	}
+	if err != nil {
+		log.Error("could not convert protobuf node")
+		return nil, fuse.ENOENT
+	}
+
+	return &Node{Ipfs: s.Ipfs, Nd: fnd}, nil
 }
 
 // ReadDirAll reads a particular directory. Disallowed for root.
@@ -186,7 +207,7 @@ func (s *Node) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 		}
 		nd, err := s.Ipfs.DAG.Get(ctx, lnk.Cid)
 		if err != nil {
-			log.Warning("error fetching directory child node: ", err)
+			log.Warn("error fetching directory child node: ", err)
 		}
 
 		t := fuse.DT_Unknown
@@ -195,7 +216,7 @@ func (s *Node) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 			t = fuse.DT_File
 		case *mdag.ProtoNode:
 			if fsn, err := ft.FSNodeFromBytes(nd.Data()); err != nil {
-				log.Warning("failed to unmarshal protonode data field:", err)
+				log.Warn("failed to unmarshal protonode data field:", err)
 			} else {
 				switch fsn.Type() {
 				case ft.TDirectory, ft.THAMTShard:
@@ -225,7 +246,7 @@ func (s *Node) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 }
 
 func (s *Node) Getxattr(ctx context.Context, req *fuse.GetxattrRequest, resp *fuse.GetxattrResponse) error {
-	// TODO: is nil the right response for 'bug off, we aint got none' ?
+	// TODO: is nil the right response for 'bug off, we ain't got none' ?
 	resp.Xattr = nil
 	return nil
 }
@@ -238,33 +259,24 @@ func (s *Node) Readlink(ctx context.Context, req *fuse.ReadlinkRequest) (string,
 }
 
 func (s *Node) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
-	c := s.Nd.Cid()
-
-	// setup our logging event
-	lm := make(lgbl.DeferredMap)
-	lm["fs"] = "ipfs"
-	lm["key"] = func() interface{} { return c.String() }
-	lm["req_offset"] = req.Offset
-	lm["req_size"] = req.Size
-	defer log.EventBegin(ctx, "fuseRead", lm).Done()
-
 	r, err := uio.NewDagReader(ctx, s.Nd, s.Ipfs.DAG)
 	if err != nil {
 		return err
 	}
-	o, err := r.Seek(req.Offset, io.SeekStart)
-	lm["res_offset"] = o
+	_, err = r.Seek(req.Offset, io.SeekStart)
 	if err != nil {
 		return err
 	}
-
-	buf := resp.Data[:min(req.Size, int(int64(r.Size())-req.Offset))]
+	// Data has a capacity of Size
+	buf := resp.Data[:int(req.Size)]
 	n, err := io.ReadFull(r, buf)
-	if err != nil && err != io.EOF {
+	resp.Data = buf[:n]
+	switch err {
+	case nil, io.EOF, io.ErrUnexpectedEOF:
+	default:
 		return err
 	}
 	resp.Data = resp.Data[:n]
-	lm["res_size"] = n
 	return nil // may be non-nil / not succeeded
 }
 
@@ -287,10 +299,3 @@ type roNode interface {
 }
 
 var _ roNode = (*Node)(nil)
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
