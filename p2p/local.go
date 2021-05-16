@@ -4,12 +4,12 @@ import (
 	"context"
 	"time"
 
-	"gx/ipfs/QmPtFaR7BWHLAjSwLh9kXcyrgTzDpuhcWLkx8ioa9RMYnx/go-libp2p-net"
-	"gx/ipfs/QmQVUtnrNGtCRkCMpXgpApfzQjc8FDaDVxHqWH8cnZQeh5/go-multiaddr-net"
-	ma "gx/ipfs/QmRKLtwMw131aK7ugC3G7ybpumMz78YrJe5dzneyindvG1/go-multiaddr"
-	tec "gx/ipfs/QmWHgLqrghM9zw77nF6gdvT9ExQ2RB9pLxkd8sDHZf1rWb/go-temp-err-catcher"
-	"gx/ipfs/QmY5Grm8pJdiSSVsYxx4uNRgweY72EmYwuSDbRnbFok3iY/go-libp2p-peer"
-	"gx/ipfs/QmZNkThpqfVXs9GNbexPrfBbXSLNYeKrE7jwFM2oqHbyqN/go-libp2p-protocol"
+	tec "github.com/jbenet/go-temp-err-catcher"
+	net "github.com/libp2p/go-libp2p-core/network"
+	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p-core/protocol"
+	ma "github.com/multiformats/go-multiaddr"
+	"github.com/multiformats/go-multiaddr/net"
 )
 
 // localListener manet streams and proxies them to libp2p services
@@ -76,7 +76,7 @@ func (l *localListener) setupStream(local manet.Conn) {
 	remote, err := l.dial(l.ctx)
 	if err != nil {
 		local.Close()
-		log.Warningf("failed to dial to remote %s/%s", l.peer.Pretty(), l.proto)
+		log.Warnf("failed to dial to remote %s/%s", l.peer.Pretty(), l.proto)
 		return
 	}
 

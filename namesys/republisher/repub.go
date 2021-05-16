@@ -7,16 +7,17 @@ import (
 
 	keystore "github.com/ipfs/go-ipfs/keystore"
 	namesys "github.com/ipfs/go-ipfs/namesys"
-	path "gx/ipfs/QmZErC2Ay6WuGi96CPg316PwitdwgLo6RxZRqVjJjRj2MR/go-path"
+	path "github.com/ipfs/go-path"
 
-	ic "gx/ipfs/QmNiJiXwWE3kRhZrC5ej3kSjWHm337pYfhjLGSCDNKJP2s/go-libp2p-crypto"
-	pb "gx/ipfs/QmPrt2JqvtFcgMBmYBjtZ5jFzq6HoFXy8PTwLb2Dpm2cGf/go-ipns/pb"
-	goprocess "gx/ipfs/QmSF8fPo3jgVBAy8fpdjjYqgG87dkJgUprRBHRd2tmfgpP/goprocess"
-	gpctx "gx/ipfs/QmSF8fPo3jgVBAy8fpdjjYqgG87dkJgUprRBHRd2tmfgpP/goprocess/context"
-	peer "gx/ipfs/QmY5Grm8pJdiSSVsYxx4uNRgweY72EmYwuSDbRnbFok3iY/go-libp2p-peer"
-	logging "gx/ipfs/QmcuXC5cxs79ro2cUuHs4HQ2bkDLJUYokwL8aivcX6HW3C/go-log"
-	proto "gx/ipfs/QmdxUuburamoF6zF9qjeQC4WYcWGbWuRmdLacMEsW8ioD8/gogo-protobuf/proto"
-	ds "gx/ipfs/Qmf4xQhNomPNhrtZc67qSnfJSjxjXs9LWvknJtSXwimPrM/go-datastore"
+	proto "github.com/gogo/protobuf/proto"
+	ds "github.com/ipfs/go-datastore"
+	ipns "github.com/ipfs/go-ipns"
+	pb "github.com/ipfs/go-ipns/pb"
+	logging "github.com/ipfs/go-log"
+	goprocess "github.com/jbenet/goprocess"
+	gpctx "github.com/jbenet/goprocess/context"
+	ic "github.com/libp2p/go-libp2p-core/crypto"
+	peer "github.com/libp2p/go-libp2p-core/peer"
 )
 
 var errNoEntry = errors.New("no previous entry")
@@ -126,7 +127,7 @@ func (rp *Republisher) republishEntry(ctx context.Context, priv ic.PrivKey) erro
 	log.Debugf("republishing ipns entry for %s", id)
 
 	// Look for it locally only
-	p, err := rp.getLastVal(id)
+	e, err := rp.getLastIPNSEntry(id)
 	if err != nil {
 		if err == errNoEntry {
 			return nil
@@ -134,25 +135,34 @@ func (rp *Republisher) republishEntry(ctx context.Context, priv ic.PrivKey) erro
 		return err
 	}
 
+	p := path.Path(e.GetValue())
+	prevEol, err := ipns.GetEOL(e)
+	if err != nil {
+		return err
+	}
+
 	// update record with same sequence number
 	eol := time.Now().Add(rp.RecordLifetime)
+	if prevEol.After(eol) {
+		eol = prevEol
+	}
 	return rp.ns.PublishWithEOL(ctx, priv, p, eol)
 }
 
-func (rp *Republisher) getLastVal(id peer.ID) (path.Path, error) {
+func (rp *Republisher) getLastIPNSEntry(id peer.ID) (*pb.IpnsEntry, error) {
 	// Look for it locally only
 	val, err := rp.ds.Get(namesys.IpnsDsKey(id))
 	switch err {
 	case nil:
 	case ds.ErrNotFound:
-		return "", errNoEntry
+		return nil, errNoEntry
 	default:
-		return "", err
+		return nil, err
 	}
 
 	e := new(pb.IpnsEntry)
 	if err := proto.Unmarshal(val, e); err != nil {
-		return "", err
+		return nil, err
 	}
-	return path.Path(e.Value), nil
+	return e, nil
 }

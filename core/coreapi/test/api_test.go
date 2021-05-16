@@ -4,23 +4,27 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"github.com/ipfs/go-ipfs/core/coreapi/interface/tests"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/ipfs/go-filestore"
 	"github.com/ipfs/go-ipfs/core"
+	"github.com/ipfs/go-ipfs/core/bootstrap"
 	"github.com/ipfs/go-ipfs/core/coreapi"
-	coreiface "github.com/ipfs/go-ipfs/core/coreapi/interface"
 	mock "github.com/ipfs/go-ipfs/core/mock"
+	"github.com/ipfs/go-ipfs/core/node/libp2p"
 	"github.com/ipfs/go-ipfs/keystore"
 	"github.com/ipfs/go-ipfs/repo"
 
-	ci "gx/ipfs/QmNiJiXwWE3kRhZrC5ej3kSjWHm337pYfhjLGSCDNKJP2s/go-libp2p-crypto"
-	"gx/ipfs/QmRBaUEQEeFWywfrZJ64QgsmvcqgLSK3VbvGMR2NM2Edpf/go-libp2p/p2p/net/mock"
-	"gx/ipfs/QmY5Grm8pJdiSSVsYxx4uNRgweY72EmYwuSDbRnbFok3iY/go-libp2p-peer"
-	pstore "gx/ipfs/QmZ9zH2FnLcxv1xyzFeUpDUeo55xEhZQHgveZijcxr7TLj/go-libp2p-peerstore"
-	"gx/ipfs/QmcZfkbgwwwH5ZLTQRHkSQBDiDqd3skY2eU6MZRgWuXcse/go-ipfs-config"
-	"gx/ipfs/Qmf4xQhNomPNhrtZc67qSnfJSjxjXs9LWvknJtSXwimPrM/go-datastore"
-	syncds "gx/ipfs/Qmf4xQhNomPNhrtZc67qSnfJSjxjXs9LWvknJtSXwimPrM/go-datastore/sync"
+	"github.com/ipfs/go-datastore"
+	syncds "github.com/ipfs/go-datastore/sync"
+	"github.com/ipfs/go-ipfs-config"
+	coreiface "github.com/ipfs/interface-go-ipfs-core"
+	"github.com/ipfs/interface-go-ipfs-core/tests"
+	ci "github.com/libp2p/go-libp2p-core/crypto"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/p2p/net/mock"
 )
 
 const testPeerID = "QmTFauExutTsy4XP6JbMFcw2Wa9645HJt2bTqL6qYDCKfe"
@@ -36,7 +40,7 @@ func (NodeProvider) MakeAPISwarm(ctx context.Context, fullIdentity bool, n int) 
 	for i := 0; i < n; i++ {
 		var ident config.Identity
 		if fullIdentity {
-			sk, pk, err := ci.GenerateKeyPair(ci.RSA, 512)
+			sk, pk, err := ci.GenerateKeyPair(ci.RSA, 2048)
 			if err != nil {
 				return nil, err
 			}
@@ -62,19 +66,23 @@ func (NodeProvider) MakeAPISwarm(ctx context.Context, fullIdentity bool, n int) 
 		}
 
 		c := config.Config{}
-		c.Addresses.Swarm = []string{fmt.Sprintf("/ip4/127.0.%d.1/tcp/4001", i)}
+		c.Addresses.Swarm = []string{fmt.Sprintf("/ip4/18.0.%d.1/tcp/4001", i)}
 		c.Identity = ident
+		c.Experimental.FilestoreEnabled = true
 
+		ds := syncds.MutexWrap(datastore.NewMapDatastore())
 		r := &repo.Mock{
 			C: c,
-			D: syncds.MutexWrap(datastore.NewMapDatastore()),
+			D: ds,
 			K: keystore.NewMemKeystore(),
+			F: filestore.NewFileManager(ds, filepath.Dir(os.TempDir())),
 		}
 
 		node, err := core.NewNode(ctx, &core.BuildCfg{
-			Repo:   r,
-			Host:   mock.MockHostOption(mn),
-			Online: fullIdentity,
+			Routing: libp2p.DHTServerOption,
+			Repo:    r,
+			Host:    mock.MockHostOption(mn),
+			Online:  fullIdentity,
 			ExtraOpts: map[string]bool{
 				"pubsub": true,
 			},
@@ -94,8 +102,8 @@ func (NodeProvider) MakeAPISwarm(ctx context.Context, fullIdentity bool, n int) 
 		return nil, err
 	}
 
-	bsinf := core.BootstrapConfigWithPeers(
-		[]pstore.PeerInfo{
+	bsinf := bootstrap.BootstrapConfigWithPeers(
+		[]peer.AddrInfo{
 			nodes[0].Peerstore.PeerInfo(nodes[0].Identity),
 		},
 	)
