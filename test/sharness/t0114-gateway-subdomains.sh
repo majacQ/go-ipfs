@@ -101,10 +101,11 @@ test_expect_success "Add test text file" '
   echo CIDv0to1=${CIDv0to1}
 '
 
+# Directory tree crafted to test for edge cases like "/ipfs/ipfs/ipns/bar"
 test_expect_success "Add the test directory" '
-  mkdir -p testdirlisting/subdir1/subdir2 &&
+  mkdir -p testdirlisting/ipfs/ipns &&
   echo "hello" > testdirlisting/hello &&
-  echo "subdir2-bar" > testdirlisting/subdir1/subdir2/bar &&
+  echo "text-file-content" > testdirlisting/ipfs/ipns/bar &&
   mkdir -p testdirlisting/api &&
   mkdir -p testdirlisting/ipfs &&
   echo "I am a txt file" > testdirlisting/api/file.txt &&
@@ -113,7 +114,7 @@ test_expect_success "Add the test directory" '
 '
 
 test_expect_success "Publish test text file to IPNS using RSA keys" '
-  RSA_KEY=$(ipfs key gen -f=b58mh --type=rsa --size=2048 test_key_rsa | head -n1 | tr -d "\n")
+  RSA_KEY=$(ipfs key gen --ipns-base=b58mh --type=rsa --size=2048 test_key_rsa | head -n1 | tr -d "\n")
   RSA_IPNS_IDv0=$(echo "$RSA_KEY" | ipfs cid format -v 0)
   RSA_IPNS_IDv1=$(echo "$RSA_KEY" | ipfs cid format -v 1 --codec libp2p-key -b base36)
   RSA_IPNS_IDv1_DAGPB=$(echo "$RSA_IPNS_IDv0" | ipfs cid format -v 1 -b base36)
@@ -125,9 +126,9 @@ test_expect_success "Publish test text file to IPNS using RSA keys" '
 '
 
 test_expect_success "Publish test text file to IPNS using ED25519 keys" '
-  ED25519_KEY=$(ipfs key gen -f=b58mh --type=ed25519 test_key_ed25519 | head -n1 | tr -d "\n")
+  ED25519_KEY=$(ipfs key gen --ipns-base=b58mh --type=ed25519 test_key_ed25519 | head -n1 | tr -d "\n")
   ED25519_IPNS_IDv0=$ED25519_KEY
-  ED25519_IPNS_IDv1=$(ipfs key list -l -f b36cid | grep test_key_ed25519 | cut -d " " -f1 | tr -d "\n")
+  ED25519_IPNS_IDv1=$(ipfs key list -l --ipns-base=base36 | grep test_key_ed25519 | cut -d " " -f1 | tr -d "\n")
   ED25519_IPNS_IDv1_DAGPB=$(echo "$ED25519_IPNS_IDv1" | ipfs cid format -v 1 -b base36 --codec protobuf)
   test_check_peerid "${ED25519_KEY}" &&
   ipfs name publish --key test_key_ed25519 --allow-offline -Q "/ipfs/$CIDv1" > name_publish_out &&
@@ -179,13 +180,6 @@ test_localhost_gateway_response_should_contain \
   "request for localhost/ipfs/{DIR_CID} returns Location HTTP header for subdomain redirect in browsers" \
   "http://localhost:$GWAY_PORT/ipfs/$DIR_CID/" \
   "Location: http://$DIR_CID.ipfs.localhost:$GWAY_PORT/"
-
-# Responses to the root domain of subdomain gateway hostname should Clear-Site-Data
-# https://github.com/ipfs/go-ipfs/issues/6975#issuecomment-597472477
-test_localhost_gateway_response_should_contain \
-  "request for localhost/ipfs/{CIDv1} returns Clear-Site-Data header to purge Origin cookies and storage" \
-  "http://localhost:$GWAY_PORT/ipfs/$CIDv1" \
-  'Clear-Site-Data: \"cookies\", \"storage\"'
 
 # We return body with HTTP 301 so existing cli scripts that use path-based
 # gateway do not break (curl doesn't auto-redirect without passing -L; wget
@@ -269,18 +263,18 @@ DIR_HOSTNAME="${DIR_CID}.ipfs.localhost:$GWAY_PORT"
 test_expect_success "valid file and subdirectory paths in directory listing at {cid}.ipfs.localhost" '
   curl -s --resolve $DIR_HOSTNAME:127.0.0.1 "http://$DIR_HOSTNAME" > list_response &&
   test_should_contain "<a href=\"/hello\">hello</a>" list_response &&
-  test_should_contain "<a href=\"/subdir1\">subdir1</a>" list_response
+  test_should_contain "<a href=\"/ipfs\">ipfs</a>" list_response
 '
 
 test_expect_success "valid parent directory path in directory listing at {cid}.ipfs.localhost/sub/dir" '
-  curl -s --resolve $DIR_HOSTNAME:127.0.0.1 "http://$DIR_HOSTNAME/subdir1/subdir2/" > list_response &&
-  test_should_contain "<a href=\"/subdir1/subdir2/./..\">..</a>" list_response &&
-  test_should_contain "<a href=\"/subdir1/subdir2/bar\">bar</a>" list_response
+  curl -s --resolve $DIR_HOSTNAME:127.0.0.1 "http://$DIR_HOSTNAME/ipfs/ipns/" > list_response &&
+  test_should_contain "<a href=\"/ipfs/ipns/./..\">..</a>" list_response &&
+  test_should_contain "<a href=\"/ipfs/ipns/bar\">bar</a>" list_response
 '
 
 test_expect_success "request for deep path resource at {cid}.ipfs.localhost/sub/dir/file" '
-  curl -s --resolve $DIR_HOSTNAME:127.0.0.1 "http://$DIR_HOSTNAME/subdir1/subdir2/bar" > list_response &&
-  test_should_contain "subdir2-bar" list_response
+  curl -s --resolve $DIR_HOSTNAME:127.0.0.1 "http://$DIR_HOSTNAME/ipfs/ipns/bar" > list_response &&
+  test_should_contain "text-file-content" list_response
 '
 
 
@@ -378,7 +372,12 @@ test_expect_success "request for http://example.com/ipfs/{CID} with X-Forwarded-
   test_should_contain \"Location: https://$CIDv1.ipfs.example.com/\" response
 "
 
-
+# Support ipfs:// in https://developer.mozilla.org/en-US/docs/Web/API/Navigator/registerProtocolHandler
+test_hostname_gateway_response_should_contain \
+  "request for example.com/ipfs/?uri=ipfs%3A%2F%2F.. produces redirect to /ipfs/.. content path" \
+  "example.com" \
+  "http://127.0.0.1:$GWAY_PORT/ipfs/?uri=ipfs%3A%2F%2FQmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco%2Fwiki%2FDiego_Maradona.html" \
+  "Location: /ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/wiki/Diego_Maradona.html"
 
 # example.com/ipns/<libp2p-key>
 
@@ -402,6 +401,21 @@ test_hostname_gateway_response_should_contain \
   "http://127.0.0.1:$GWAY_PORT/ipns/en.wikipedia-on-ipfs.org/wiki" \
   "Location: http://en.wikipedia-on-ipfs.org.ipns.example.com/wiki"
 
+# DNSLink on Public gateway with a single-level wildcard TLS cert
+# "Option C" from  https://github.com/ipfs/in-web-browsers/issues/169
+test_expect_success \
+  "request for example.com/ipns/{fqdn} with X-Forwarded-Proto redirects to TLS-safe label in subdomain" "
+  curl -H \"Host: example.com\" -H \"X-Forwarded-Proto: https\" -sD - \"http://127.0.0.1:$GWAY_PORT/ipns/en.wikipedia-on-ipfs.org/wiki\" > response &&
+  test_should_contain \"Location: https://en-wikipedia--on--ipfs-org.ipns.example.com/wiki\" response
+  "
+
+# Support ipns:// in https://developer.mozilla.org/en-US/docs/Web/API/Navigator/registerProtocolHandler
+test_hostname_gateway_response_should_contain \
+  "request for example.com/ipns/?uri=ipns%3A%2F%2F.. produces redirect to /ipns/.. content path" \
+  "example.com" \
+  "http://127.0.0.1:$GWAY_PORT/ipns/?uri=ipns%3A%2F%2Fen.wikipedia-on-ipfs.org" \
+  "Location: /ipns/en.wikipedia-on-ipfs.org"
+
 # *.ipfs.example.com: subdomain requests made with custom FQDN in Host header
 
 test_hostname_gateway_response_should_contain \
@@ -422,18 +436,26 @@ DIR_FQDN="${DIR_CID}.ipfs.example.com"
 test_expect_success "valid file and directory paths in directory listing at {cid}.ipfs.example.com" '
   curl -s -H "Host: $DIR_FQDN" http://127.0.0.1:$GWAY_PORT > list_response &&
   test_should_contain "<a href=\"/hello\">hello</a>" list_response &&
-  test_should_contain "<a href=\"/subdir1\">subdir1</a>" list_response
+  test_should_contain "<a href=\"/ipfs\">ipfs</a>" list_response
 '
 
 test_expect_success "valid parent directory path in directory listing at {cid}.ipfs.example.com/sub/dir" '
-  curl -s -H "Host: $DIR_FQDN" http://127.0.0.1:$GWAY_PORT/subdir1/subdir2/ > list_response &&
-  test_should_contain "<a href=\"/subdir1/subdir2/./..\">..</a>" list_response &&
-  test_should_contain "<a href=\"/subdir1/subdir2/bar\">bar</a>" list_response
+  curl -s -H "Host: $DIR_FQDN" http://127.0.0.1:$GWAY_PORT/ipfs/ipns/ > list_response &&
+  test_should_contain "<a href=\"/ipfs/ipns/./..\">..</a>" list_response &&
+  test_should_contain "<a href=\"/ipfs/ipns/bar\">bar</a>" list_response
+'
+
+# Note 1: we test for sneaky subdir names  {cid}.ipfs.example.com/ipfs/ipns/ :^)
+# Note 2: example.com/ipfs/.. present in HTML will be redirected to subdomain, so this is expected behavior
+test_expect_success "valid breadcrumb links in the header of directory listing at {cid}.ipfs.example.com/sub/dir" '
+  curl -s -H "Host: $DIR_FQDN" http://127.0.0.1:$GWAY_PORT/ipfs/ipns/ > list_response &&
+  test_should_contain "Index of" list_response &&
+  test_should_contain "/ipfs/<a href=\"//example.com/ipfs/${DIR_CID}\">${DIR_CID}</a>/<a href=\"//example.com/ipfs/${DIR_CID}/ipfs\">ipfs</a>/<a href=\"//example.com/ipfs/${DIR_CID}/ipfs/ipns\">ipns</a>" list_response
 '
 
 test_expect_success "request for deep path resource {cid}.ipfs.example.com/sub/dir/file" '
-  curl -s -H "Host: $DIR_FQDN" http://127.0.0.1:$GWAY_PORT/subdir1/subdir2/bar > list_response &&
-  test_should_contain "subdir2-bar" list_response
+  curl -s -H "Host: $DIR_FQDN" http://127.0.0.1:$GWAY_PORT/ipfs/ipns/bar > list_response &&
+  test_should_contain "text-file-content" list_response
 '
 
 # *.ipns.example.com
@@ -530,22 +552,30 @@ test_hostname_gateway_response_should_contain \
   "http://127.0.0.1:$GWAY_PORT" \
   "$CID_VAL"
 
+# DNSLink on Public gateway with a single-level wildcard TLS cert
+# "Option C" from  https://github.com/ipfs/in-web-browsers/issues/169
+test_expect_success \
+  "request for {single-label-dnslink}.ipns.example.com with X-Forwarded-Proto returns expected payload" "
+  curl -H \"Host: dnslink--subdomain--gw--test-example-org.ipns.example.com\" -H \"X-Forwarded-Proto: https\" -sD - \"http://127.0.0.1:$GWAY_PORT\" > response &&
+  test_should_contain \"$CID_VAL\" response
+  "
+
 ## Test subdomain handling of CIDs that do not fit in a single DNS Label (>63chars)
 ## https://github.com/ipfs/go-ipfs/issues/7318
 ## ============================================================================
 
-# TODO: replace with cidv1
 # ed25519 fits under 63 char limit when represented in base36
-CIDv1_ED25519_RAW="12D3KooWP3ggTJV8LGckDHc4bVyXGhEWuBskoFyE6Rn2BJBqJtpa"
-CIDv1_ED25519_DNSSAFE="k51qzi5uqu5dl2yn0d6xu8q5aqa61jh8zeyixz9tsju80n15ssiyew48912c63"
+IPNS_KEY="test_key_ed25519"
+IPNS_ED25519_B58MH=$(ipfs key list -l --ipns-base b58mh | grep $IPNS_KEY | cut -d" " -f1 | tr -d "\n")
+IPNS_ED25519_B36CID=$(ipfs key list -l --ipns-base base36 | grep $IPNS_KEY | cut -d" " -f1 | tr -d "\n")
 # sha512 will be over 63char limit, even when represented in Base36
 CIDv1_TOO_LONG=$(echo $CID_VAL | ipfs add --cid-version 1 --hash sha2-512 -Q)
 
 # local: *.localhost
 test_localhost_gateway_response_should_contain \
-  "request for a ED25519 CID at localhost/ipfs/{CIDv1} returns Location HTTP header for DNS-safe subdomain redirect in browsers" \
-  "http://localhost:$GWAY_PORT/ipns/$CIDv1_ED25519_RAW" \
-  "Location: http://${CIDv1_ED25519_DNSSAFE}.ipns.localhost:$GWAY_PORT/"
+  "request for a ED25519 libp2p-key at localhost/ipns/{b58mh} returns Location HTTP header for DNS-safe subdomain redirect in browsers" \
+  "http://localhost:$GWAY_PORT/ipns/$IPNS_ED25519_B58MH" \
+  "Location: http://${IPNS_ED25519_B36CID}.ipns.localhost:$GWAY_PORT/"
 
 # router should not redirect to hostnames that could fail due to DNS limits
 test_localhost_gateway_response_should_contain \
@@ -567,10 +597,10 @@ test_localhost_gateway_response_should_contain \
 # public subdomain gateway: *.example.com
 
 test_hostname_gateway_response_should_contain \
-  "request for a ED25519 CID at example.com/ipfs/{CIDv1} returns Location HTTP header for DNS-safe subdomain redirect in browsers" \
+  "request for a ED25519 libp2p-key at example.com/ipns/{b58mh} returns Location HTTP header for DNS-safe subdomain redirect in browsers" \
   "example.com" \
-  "http://127.0.0.1:$GWAY_PORT/ipns/$CIDv1_ED25519_RAW" \
-  "Location: http://${CIDv1_ED25519_DNSSAFE}.ipns.example.com"
+  "http://127.0.0.1:$GWAY_PORT/ipns/$IPNS_ED25519_B58MH" \
+  "Location: http://${IPNS_ED25519_B36CID}.ipns.example.com"
 
 test_hostname_gateway_response_should_contain \
   "request for a too long CID at example.com/ipfs/{CIDv1} returns human readable error" \
@@ -621,7 +651,7 @@ test_hostname_gateway_response_should_contain \
 ## Test path-based requests with a custom hostname config
 ## ============================================================================
 
-# set explicit subdomain gateway config for the hostname
+# set explicit no-subdomain gateway config for the hostname
 ipfs config --json Gateway.PublicGateways '{
   "example.com": {
     "UseSubdomains": false,
@@ -820,6 +850,107 @@ test_expect_success "request for http://fake.domain.com/ipfs/{CID} with X-Forwar
   curl -H \"Host: fake.domain.com\" -H \"X-Forwarded-Host: example.com\" -H \"X-Forwarded-Proto: https\" -sD - \"http://127.0.0.1:$GWAY_PORT/ipfs/$CIDv1\" > response &&
   test_should_contain \"Location: https://$CIDv1.ipfs.example.com/\" response
 "
+
+## ============================================================================
+## Test support for wildcards in gateway config
+## ============================================================================
+
+# set explicit subdomain gateway config for the hostnames
+ipfs config --json Gateway.PublicGateways '{
+  "*.example1.com": {
+    "UseSubdomains": true,
+    "Paths": ["/ipfs"]
+  },
+  "*.*.example2.com": {
+    "UseSubdomains": true,
+    "Paths": ["/ipfs"]
+  },
+  "foo.*.example3.com": {
+    "UseSubdomains": true,
+    "Paths": ["/ipfs"]
+  },
+  "foo.bar-*-boo.example4.com": {
+    "UseSubdomains": true,
+    "Paths": ["/ipfs"]
+  }
+}' || exit 1
+# restart daemon to apply config changes
+test_kill_ipfs_daemon
+test_launch_ipfs_daemon --offline
+
+# *.example1.com
+
+test_hostname_gateway_response_should_contain \
+  "request for foo.example1.com/ipfs/{CIDv1} produces redirect to {CIDv1}.ipfs.foo.example1.com" \
+  "foo.example1.com" \
+  "http://127.0.0.1:$GWAY_PORT/ipfs/$CIDv1" \
+  "Location: http://$CIDv1.ipfs.foo.example1.com/"
+
+test_hostname_gateway_response_should_contain \
+  "request for {CID}.ipfs.foo.example1.com should return expected payload" \
+  "${CIDv1}.ipfs.foo.example1.com" \
+  "http://127.0.0.1:$GWAY_PORT/" \
+  "$CID_VAL"
+
+# *.*.example2.com
+
+test_hostname_gateway_response_should_contain \
+  "request for foo.bar.example2.com/ipfs/{CIDv1} produces redirect to {CIDv1}.ipfs.foo.bar.example2.com" \
+  "foo.bar.example2.com" \
+  "http://127.0.0.1:$GWAY_PORT/ipfs/$CIDv1" \
+  "Location: http://$CIDv1.ipfs.foo.bar.example2.com/"
+
+test_hostname_gateway_response_should_contain \
+  "request for {CID}.ipfs.foo.bar.example2.com should return expected payload" \
+  "${CIDv1}.ipfs.foo.bar.example2.com" \
+  "http://127.0.0.1:$GWAY_PORT/" \
+  "$CID_VAL"
+
+# foo.*.example3.com
+
+test_hostname_gateway_response_should_contain \
+  "request for foo.bar.example3.com/ipfs/{CIDv1} produces redirect to {CIDv1}.ipfs.foo.bar.example3.com" \
+  "foo.bar.example3.com" \
+  "http://127.0.0.1:$GWAY_PORT/ipfs/$CIDv1" \
+  "Location: http://$CIDv1.ipfs.foo.bar.example3.com/"
+
+test_hostname_gateway_response_should_contain \
+  "request for {CID}.ipfs.foo.bar.example3.com should return expected payload" \
+  "${CIDv1}.ipfs.foo.bar.example3.com" \
+  "http://127.0.0.1:$GWAY_PORT/" \
+  "$CID_VAL"
+
+# foo.bar-*-boo.example4.com
+
+test_hostname_gateway_response_should_contain \
+  "request for foo.bar-dev-boo.example4.com/ipfs/{CIDv1} produces redirect to {CIDv1}.ipfs.foo.bar-dev-boo.example4.com" \
+  "foo.bar-dev-boo.example4.com" \
+  "http://127.0.0.1:$GWAY_PORT/ipfs/$CIDv1" \
+  "Location: http://$CIDv1.ipfs.foo.bar-dev-boo.example4.com/"
+
+test_hostname_gateway_response_should_contain \
+  "request for {CID}.ipfs.foo.bar-dev-boo.example4.com should return expected payload" \
+  "${CIDv1}.ipfs.foo.bar-dev-boo.example4.com" \
+  "http://127.0.0.1:$GWAY_PORT/" \
+  "$CID_VAL"
+
+## ============================================================================
+## Test support for overriding implicit defaults
+## ============================================================================
+
+# disable subdomain gateway at localhost by removing implicit config
+ipfs config --json Gateway.PublicGateways '{
+  "localhost": null
+}' || exit 1
+
+# restart daemon to apply config changes
+test_kill_ipfs_daemon
+test_launch_ipfs_daemon --offline
+
+test_localhost_gateway_response_should_contain \
+  "request for localhost/ipfs/{CID} stays on path when subdomain gw is explicitly disabled" \
+  "http://localhost:$GWAY_PORT/ipfs/$CIDv1" \
+  "$CID_VAL"
 
 # =============================================================================
 # ensure we end with empty Gateway.PublicGateways
