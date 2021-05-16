@@ -39,12 +39,14 @@ dir-index-html.
 > git commit -m 'chore: update dir-index-html to vX.Y.Z'
 ```
 
-Finally, re-generate the directory index HTML template and amend the previous
+Finally, re-generate the directory index HTML template, tidy, and amend the previous
 commit.
 
 ```bash
 > go generate .
 > git add bindata.go
+> git add bindata_version_hash.go
+> go mod tidy
 > git commit --amend --no-edit
 
 ```

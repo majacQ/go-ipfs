@@ -7,6 +7,7 @@ import (
 	dag "github.com/ipfs/go-ipfs/core/commands/dag"
 	name "github.com/ipfs/go-ipfs/core/commands/name"
 	ocmd "github.com/ipfs/go-ipfs/core/commands/object"
+	"github.com/ipfs/go-ipfs/core/commands/pin"
 	unixfs "github.com/ipfs/go-ipfs/core/commands/unixfs"
 
 	cmds "github.com/ipfs/go-ipfs-cmds"
@@ -46,7 +47,7 @@ DATA STRUCTURE COMMANDS
 
 ADVANCED COMMANDS
   daemon        Start a long-running daemon process
-  mount         Mount an IPFS read-only mountpoint
+  mount         Mount an IPFS read-only mount point
   resolve       Resolve any type of name
   name          Publish and resolve IPNS names
   key           Create and list IPNS name keypairs
@@ -136,7 +137,7 @@ var rootSubcommands = map[string]*cmds.Command{
 	"mount":     MountCmd,
 	"name":      name.NameCmd,
 	"object":    ocmd.ObjectCmd,
-	"pin":       PinCmd,
+	"pin":       pin.PinCmd,
 	"ping":      PingCmd,
 	"p2p":       P2PCmd,
 	"refs":      RefsCmd,
@@ -191,6 +192,7 @@ var rootROSubcommands = map[string]*cmds.Command{
 		Subcommands: map[string]*cmds.Command{
 			"get":     dag.DagGetCmd,
 			"resolve": dag.DagResolveCmd,
+			"stat":    dag.DagStatCmd,
 		},
 	},
 	"resolve": ResolveCmd,
