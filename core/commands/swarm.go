@@ -19,8 +19,6 @@ import (
 	config "github.com/ipfs/go-ipfs-config"
 	inet "github.com/libp2p/go-libp2p-core/network"
 	peer "github.com/libp2p/go-libp2p-core/peer"
-	swarm "github.com/libp2p/go-libp2p-swarm"
-	mafilter "github.com/libp2p/go-maddr-filter"
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	mamask "github.com/whyrusleeping/multiaddr-filter"
@@ -362,6 +360,11 @@ ipfs swarm connect /ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N
 		cmds.StringArg("address", true, true, "Address of peer to connect to.").EnableStdin(),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
+		node, err := cmdenv.GetNode(env)
+		if err != nil {
+			return err
+		}
+
 		api, err := cmdenv.GetApi(env, req)
 		if err != nil {
 			return err
@@ -369,7 +372,7 @@ ipfs swarm connect /ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N
 
 		addrs := req.Arguments
 
-		pis, err := parseAddresses(req.Context, addrs)
+		pis, err := parseAddresses(req.Context, addrs, node.DNSResolver)
 		if err != nil {
 			return err
 		}
@@ -410,12 +413,17 @@ it will reconnect.
 		cmds.StringArg("address", true, true, "Address of peer to disconnect from.").EnableStdin(),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
+		node, err := cmdenv.GetNode(env)
+		if err != nil {
+			return err
+		}
+
 		api, err := cmdenv.GetApi(env, req)
 		if err != nil {
 			return err
 		}
 
-		addrs, err := parseAddresses(req.Context, req.Arguments)
+		addrs, err := parseAddresses(req.Context, req.Arguments, node.DNSResolver)
 		if err != nil {
 			return err
 		}
@@ -455,9 +463,9 @@ it will reconnect.
 
 // parseAddresses is a function that takes in a slice of string peer addresses
 // (multiaddr + peerid) and returns a slice of properly constructed peers
-func parseAddresses(ctx context.Context, addrs []string) ([]peer.AddrInfo, error) {
+func parseAddresses(ctx context.Context, addrs []string, rslv *madns.Resolver) ([]peer.AddrInfo, error) {
 	// resolve addresses
-	maddrs, err := resolveAddresses(ctx, addrs)
+	maddrs, err := resolveAddresses(ctx, addrs, rslv)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +474,7 @@ func parseAddresses(ctx context.Context, addrs []string) ([]peer.AddrInfo, error
 }
 
 // resolveAddresses resolves addresses parallelly
-func resolveAddresses(ctx context.Context, addrs []string) ([]ma.Multiaddr, error) {
+func resolveAddresses(ctx context.Context, addrs []string, rslv *madns.Resolver) ([]ma.Multiaddr, error) {
 	ctx, cancel := context.WithTimeout(ctx, dnsResolveTimeout)
 	defer cancel()
 
@@ -490,7 +498,7 @@ func resolveAddresses(ctx context.Context, addrs []string) ([]ma.Multiaddr, erro
 		wg.Add(1)
 		go func(maddr ma.Multiaddr) {
 			defer wg.Done()
-			raddrs, err := madns.Resolve(ctx, maddr)
+			raddrs, err := rslv.Resolve(ctx, maddr)
 			if err != nil {
 				resolveErrC <- err
 				return
@@ -559,14 +567,8 @@ Filters default to those specified under the "Swarm.AddrFilters" config key.
 			return ErrNotOnline
 		}
 
-		// FIXME(steb)
-		swrm, ok := n.PeerHost.Network().(*swarm.Swarm)
-		if !ok {
-			return errors.New("failed to cast network to swarm network")
-		}
-
 		var output []string
-		for _, f := range swrm.Filters.FiltersForAction(mafilter.ActionDeny) {
+		for _, f := range n.Filters.FiltersForAction(ma.ActionDeny) {
 			s, err := mamask.ConvertIPNet(&f)
 			if err != nil {
 				return err
@@ -601,12 +603,6 @@ var swarmFiltersAddCmd = &cmds.Command{
 			return ErrNotOnline
 		}
 
-		// FIXME(steb)
-		swrm, ok := n.PeerHost.Network().(*swarm.Swarm)
-		if !ok {
-			return errors.New("failed to cast network to swarm network")
-		}
-
 		if len(req.Arguments) == 0 {
 			return errors.New("no filters to add")
 		}
@@ -627,7 +623,7 @@ var swarmFiltersAddCmd = &cmds.Command{
 				return err
 			}
 
-			swrm.Filters.AddFilter(*mask, mafilter.ActionDeny)
+			n.Filters.AddFilter(*mask, ma.ActionDeny)
 		}
 
 		added, err := filtersAdd(r, cfg, req.Arguments)
@@ -663,11 +659,6 @@ var swarmFiltersRmCmd = &cmds.Command{
 			return ErrNotOnline
 		}
 
-		swrm, ok := n.PeerHost.Network().(*swarm.Swarm)
-		if !ok {
-			return errors.New("failed to cast network to swarm network")
-		}
-
 		r, err := fsrepo.Open(env.(*commands.Context).ConfigRoot)
 		if err != nil {
 			return err
@@ -679,9 +670,9 @@ var swarmFiltersRmCmd = &cmds.Command{
 		}
 
 		if req.Arguments[0] == "all" || req.Arguments[0] == "*" {
-			fs := swrm.Filters.FiltersForAction(mafilter.ActionDeny)
+			fs := n.Filters.FiltersForAction(ma.ActionDeny)
 			for _, f := range fs {
-				swrm.Filters.RemoveLiteral(f)
+				n.Filters.RemoveLiteral(f)
 			}
 
 			removed, err := filtersRemoveAll(r, cfg)
@@ -698,7 +689,7 @@ var swarmFiltersRmCmd = &cmds.Command{
 				return err
 			}
 
-			swrm.Filters.RemoveLiteral(*mask)
+			n.Filters.RemoveLiteral(*mask)
 		}
 
 		removed, err := filtersRemove(r, cfg, req.Arguments)

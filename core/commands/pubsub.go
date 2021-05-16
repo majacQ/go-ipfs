@@ -74,7 +74,7 @@ This command outputs data in the following encodings:
 		cmds.StringArg("topic", true, false, "String name of topic to subscribe to."),
 	},
 	Options: []cmds.Option{
-		cmds.BoolOption(pubsubDiscoverOptionName, "try to discover other peers subscribed to the same topic"),
+		cmds.BoolOption(pubsubDiscoverOptionName, "Deprecated option to instruct pubsub to discovery peers for the topic. Discovery is now built into pubsub."),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
 		api, err := cmdenv.GetApi(env, req)
@@ -83,9 +83,7 @@ This command outputs data in the following encodings:
 		}
 
 		topic := req.Arguments[0]
-		discover, _ := req.Options[pubsubDiscoverOptionName].(bool)
-
-		sub, err := api.PubSub().Subscribe(req.Context, topic, options.PubSub.Discover(discover))
+		sub, err := api.PubSub().Subscribe(req.Context, topic)
 		if err != nil {
 			return err
 		}
@@ -207,7 +205,7 @@ To use, the daemon must be run with '--enable-pubsub-experiment'.
 
 func stringListEncoder(req *cmds.Request, w io.Writer, list *stringList) error {
 	for _, str := range list.Strings {
-		_, err := fmt.Fprintf(w, "%s\n", str)
+		_, err := fmt.Fprintf(w, "%s\n", cmdenv.EscNonPrint(str))
 		if err != nil {
 			return err
 		}

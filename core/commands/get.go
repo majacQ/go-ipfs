@@ -14,11 +14,11 @@ import (
 	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
 	"github.com/ipfs/go-ipfs/core/commands/e"
 
+	"github.com/cheggaaa/pb"
 	cmds "github.com/ipfs/go-ipfs-cmds"
 	files "github.com/ipfs/go-ipfs-files"
 	"github.com/ipfs/interface-go-ipfs-core/path"
 	"github.com/whyrusleeping/tar-utils"
-	"gopkg.in/cheggaaa/pb.v1"
 )
 
 var ErrInvalidCompressionLevel = errors.New("compression level must be between 1 and 9")
@@ -155,7 +155,7 @@ func makeProgressBar(out io.Writer, l int64) *pb.ProgressBar {
 	bar.Output = out
 
 	// the progress bar lib doesn't give us a way to get the width of the output,
-	// so as a hack we just use a callback to measure the output, then git rid of it
+	// so as a hack we just use a callback to measure the output, then get rid of it
 	bar.Callback = func(line string) {
 		terminalWidth := len(line)
 		bar.Callback = nil

@@ -18,7 +18,6 @@ import (
 	path "github.com/ipfs/go-path"
 	peer "github.com/libp2p/go-libp2p-core/peer"
 	routing "github.com/libp2p/go-libp2p-core/routing"
-	b58 "github.com/mr-tron/base58/base58"
 )
 
 var ErrNotDHT = errors.New("routing service is not a DHT")
@@ -76,19 +75,28 @@ var queryDhtCmd = &cmds.Command{
 		ctx, cancel := context.WithCancel(req.Context)
 		ctx, events := routing.RegisterForQueryEvents(ctx)
 
-		closestPeers, err := nd.DHT.GetClosestPeers(ctx, string(id))
-		if err != nil {
-			cancel()
-			return err
+		dht := nd.DHT.WAN
+		if !nd.DHT.WANActive() {
+			dht = nd.DHT.LAN
 		}
 
+		errCh := make(chan error, 1)
 		go func() {
+			defer close(errCh)
 			defer cancel()
-			for p := range closestPeers {
-				routing.PublishQueryEvent(ctx, &routing.QueryEvent{
-					ID:   p,
-					Type: routing.FinalPeer,
-				})
+			closestPeers, err := dht.GetClosestPeers(ctx, string(id))
+			if closestPeers != nil {
+				for p := range closestPeers {
+					routing.PublishQueryEvent(ctx, &routing.QueryEvent{
+						ID:   p,
+						Type: routing.FinalPeer,
+					})
+				}
+			}
+
+			if err != nil {
+				errCh <- err
+				return
 			}
 		}()
 
@@ -98,15 +106,13 @@ var queryDhtCmd = &cmds.Command{
 			}
 		}
 
-		return nil
+		return <-errCh
 	},
 	Encoders: cmds.EncoderMap{
 		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, out *routing.QueryEvent) error {
 			pfm := pfuncMap{
-				routing.PeerResponse: func(obj *routing.QueryEvent, out io.Writer, verbose bool) error {
-					for _, p := range obj.Responses {
-						fmt.Fprintf(out, "%s\n", p.ID.Pretty())
-					}
+				routing.FinalPeer: func(obj *routing.QueryEvent, out io.Writer, verbose bool) error {
+					fmt.Fprintf(out, "%s\n", obj.ID)
 					return nil
 				},
 			}
@@ -669,20 +675,15 @@ func printEvent(obj *routing.QueryEvent, out io.Writer, verbose bool, override p
 
 func escapeDhtKey(s string) (string, error) {
 	parts := path.SplitList(s)
-	switch len(parts) {
-	case 1:
-		k, err := b58.Decode(s)
-		if err != nil {
-			return "", err
-		}
-		return string(k), nil
-	case 3:
-		k, err := b58.Decode(parts[2])
-		if err != nil {
-			return "", err
-		}
-		return path.Join(append(parts[:2], string(k))), nil
-	default:
+	if len(parts) != 3 ||
+		parts[0] != "" ||
+		!(parts[1] == "ipns" || parts[1] == "pk") {
 		return "", errors.New("invalid key")
 	}
+
+	k, err := peer.Decode(parts[2])
+	if err != nil {
+		return "", err
+	}
+	return path.Join(append(parts[:2], string(k))), nil
 }

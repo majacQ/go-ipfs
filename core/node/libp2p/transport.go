@@ -1,33 +1,54 @@
 package libp2p
 
 import (
-	"github.com/libp2p/go-libp2p"
+	"fmt"
+
+	config "github.com/ipfs/go-ipfs-config"
+	libp2p "github.com/libp2p/go-libp2p"
 	metrics "github.com/libp2p/go-libp2p-core/metrics"
 	libp2pquic "github.com/libp2p/go-libp2p-quic-transport"
-	secio "github.com/libp2p/go-libp2p-secio"
-	tls "github.com/libp2p/go-libp2p-tls"
+	tcp "github.com/libp2p/go-tcp-transport"
+	websocket "github.com/libp2p/go-ws-transport"
+	quic "github.com/lucas-clemente/quic-go"
+
+	"go.uber.org/fx"
 )
 
-var DefaultTransports = simpleOpt(libp2p.DefaultTransports)
-var QUIC = simpleOpt(libp2p.Transport(libp2pquic.NewTransport))
+// See https://github.com/ipfs/go-ipfs/issues/7526 and
+// https://github.com/lucas-clemente/quic-go/releases/tag/v0.17.3.
+// TODO: remove this once the network has upgraded to > v0.6.0.
+func init() {
+	quic.RetireBugBackwardsCompatibilityMode = true
+}
 
-func Security(enabled, preferTLS bool) interface{} {
-	if !enabled {
-		return func() (opts Libp2pOpts) {
-			// TODO: shouldn't this be Errorf to guarantee visibility?
-			log.Warnf(`Your IPFS node has been configured to run WITHOUT ENCRYPTED CONNECTIONS.
-		You will not be able to connect to any nodes configured to use encrypted connections`)
-			opts.Opts = append(opts.Opts, libp2p.NoSecurity)
-			return opts
+func Transports(tptConfig config.Transports) interface{} {
+	return func(pnet struct {
+		fx.In
+		Fprint PNetFingerprint `optional:"true"`
+	}) (opts Libp2pOpts, err error) {
+		privateNetworkEnabled := pnet.Fprint != nil
+
+		if tptConfig.Network.TCP.WithDefault(true) {
+			opts.Opts = append(opts.Opts, libp2p.Transport(tcp.NewTCPTransport))
 		}
-	}
-	return func() (opts Libp2pOpts) {
-		if preferTLS {
-			opts.Opts = append(opts.Opts, libp2p.ChainOptions(libp2p.Security(tls.ID, tls.New), libp2p.Security(secio.ID, secio.New)))
-		} else {
-			opts.Opts = append(opts.Opts, libp2p.ChainOptions(libp2p.Security(secio.ID, secio.New), libp2p.Security(tls.ID, tls.New)))
+
+		if tptConfig.Network.Websocket.WithDefault(true) {
+			opts.Opts = append(opts.Opts, libp2p.Transport(websocket.New))
 		}
-		return opts
+
+		if tptConfig.Network.QUIC.WithDefault(!privateNetworkEnabled) {
+			if privateNetworkEnabled {
+				// QUIC was force enabled while the private network was turned on.
+				// Fail and tell the user.
+				return opts, fmt.Errorf(
+					"The QUIC transport does not support private networks. " +
+						"Please disable Swarm.Transports.Network.QUIC.",
+				)
+			}
+			opts.Opts = append(opts.Opts, libp2p.Transport(libp2pquic.NewTransport))
+		}
+
+		return opts, nil
 	}
 }
 

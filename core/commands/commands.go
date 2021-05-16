@@ -26,7 +26,7 @@ func (e *commandEncoder) Encode(v interface{}) error {
 	)
 
 	if cmd, ok = v.(*Command); !ok {
-		return fmt.Errorf(`core/commands: uenxpected type %T, expected *"core/commands".Command`, v)
+		return fmt.Errorf(`core/commands: unexpected type %T, expected *"core/commands".Command`, v)
 	}
 
 	for _, s := range cmdPathStrings(cmd, cmd.showOpts) {
@@ -66,6 +66,7 @@ func CommandsCmd(root *cmds.Command) *cmds.Command {
 		Options: []cmds.Option{
 			cmds.BoolOption(flagsOptionName, "f", "Show command flags"),
 		},
+		Extra: CreateCmdExtras(SetDoesNotUseRepo(true)),
 		Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
 			rootCmd := cmd2outputCmd("ipfs", root)
 			rootCmd.showOpts, _ = req.Options[flagsOptionName].(bool)

@@ -41,6 +41,47 @@ SHARNESS_LIB="lib/sharness/sharness.sh"
 
 # Please put go-ipfs specific shell functions below
 
+###
+# BEGIN Check for pre-existing daemon being stuck
+###
+wait_prev_cleanup_tick_secs=1
+wait_prev_cleanup_max_secs=5
+cur_test_pwd="$(pwd)"
+
+while true ; do
+  echo -n > stuck_cwd_list
+
+  lsof -c ipfs -Ffn 2>/dev/null | grep -A1 '^fcwd$' | grep '^n' | cut -b 2- | while read -r pwd_of_stuck ; do
+    case "$pwd_of_stuck" in
+      "$cur_test_pwd"*)
+        echo "$pwd_of_stuck" >> stuck_cwd_list
+        ;;
+      *)
+        ;;
+    esac
+  done
+
+  test -s stuck_cwd_list || break
+
+  test "$wait_prev_cleanup_max_secs" -le 0 && break
+
+  echo "Daemons still running, waiting for ${wait_prev_cleanup_max_secs}s"
+  sleep $wait_prev_cleanup_tick_secs
+
+  wait_prev_cleanup_max_secs="$(( $wait_prev_cleanup_max_secs - $wait_prev_cleanup_tick_secs ))"
+done
+
+if test -s stuck_cwd_list ; then
+  test_expect_success "ipfs daemon (s)seems to be running with CWDs of
+$(cat stuck_cwd_list)
+Almost certainly a leftover from a prior test, ABORTING" 'false'
+
+  test_done
+fi
+###
+# END Check for pre-existing daemon being stuck
+###
+
 # Make sure the ipfs path is set, also set in test_init_ipfs but that
 # is not always used.
 export IPFS_PATH="$(pwd)/.ipfs"
@@ -152,7 +193,7 @@ test_init_ipfs() {
 
   test_expect_success "ipfs init succeeds" '
     export IPFS_PATH="$(pwd)/.ipfs" &&
-    ipfs init --profile=test -b=2048 > /dev/null
+    ipfs init --profile=test > /dev/null
   '
 
   test_expect_success "prepare config -- mounting" '
@@ -402,10 +443,46 @@ file_size() {
     $_STAT "$1"
 }
 
+# len 46: 2048-bit RSA keys, b58mh-encoded
+# len 52: ED25519 keys, b58mh-encoded
+# len 56: 2048-bit RSA keys, base36-encoded
+# len 62: ED25519 keys, base36-encoded
 test_check_peerid() {
   peeridlen=$(echo "$1" | tr -dC "[:alnum:]" | wc -c | tr -d " ") &&
-  test "$peeridlen" = "46" || {
+  test "$peeridlen" = "46" -o "$peeridlen" = "52" -o "$peeridlen" = "56" -o "$peeridlen" = "62" || {
     echo "Bad peerid '$1' with len '$peeridlen'"
+    return 1
+  }
+}
+
+test_check_rsa2048_b58mh_peerid() {
+  peeridlen=$(echo "$1" | tr -dC "[:alnum:]" | wc -c | tr -d " ") &&
+  test "$peeridlen" = "46" || {
+    echo "Bad RSA2048 B58MH peerid '$1' with len '$peeridlen'"
+    return 1
+  }
+}
+
+test_check_ed25519_b58mh_peerid() {
+  peeridlen=$(echo "$1" | tr -dC "[:alnum:]" | wc -c | tr -d " ") &&
+  test "$peeridlen" = "52" || {
+    echo "Bad ED25519 B58MH peerid '$1' with len '$peeridlen'"
+    return 1
+  }
+}
+
+test_check_rsa2048_base36_peerid() {
+  peeridlen=$(echo "$1" | tr -dC "[:alnum:]" | wc -c | tr -d " ") &&
+  test "$peeridlen" = "56" || {
+    echo "Bad RSA2048 B36CID peerid '$1' with len '$peeridlen'"
+    return 1
+  }
+}
+
+test_check_ed25519_base36_peerid() {
+  peeridlen=$(echo "$1" | tr -dC "[:alnum:]" | wc -c | tr -d " ") &&
+  test "$peeridlen" = "62" || {
+    echo "Bad ED25519 B36CID peerid '$1' with len '$peeridlen'"
     return 1
   }
 }

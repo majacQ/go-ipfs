@@ -82,7 +82,23 @@ the `--migrate` flag).
 
 Default: https://ipfs.io/ipfs/$something (depends on the IPFS version)
 
+## `IPFS_NS_MAP`
+
+Adds static namesys records for deterministic tests and debugging.
+Useful for testing things like DNSLink without real DNS lookup.
+
+Example:
+
+```console
+$ IPFS_NS_MAP="dnslink-test1.example.com:/ipfs/bafkreicysg23kiwv34eg2d7qweipxwosdo2py4ldv42nbauguluen5v6am,dnslink-test2.example.com:/ipns/dnslink-test1.example.com" ipfs daemon
+...
+$ ipfs resolve -r /ipns/dnslink-test2.example.com
+/ipfs/bafkreicysg23kiwv34eg2d7qweipxwosdo2py4ldv42nbauguluen5v6am
+```
+
 ## `LIBP2P_MUX_PREFS`
+
+Deprecated: Use the `Swarm.Transports.Multiplexers` config field.
 
 Tells go-ipfs which multiplexers to use in which order.
 

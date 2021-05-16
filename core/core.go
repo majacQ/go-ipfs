@@ -26,7 +26,6 @@ import (
 	mfs "github.com/ipfs/go-mfs"
 	resolver "github.com/ipfs/go-path/resolver"
 	goprocess "github.com/jbenet/goprocess"
-	autonat "github.com/libp2p/go-libp2p-autonat-svc"
 	connmgr "github.com/libp2p/go-libp2p-core/connmgr"
 	ic "github.com/libp2p/go-libp2p-core/crypto"
 	p2phost "github.com/libp2p/go-libp2p-core/host"
@@ -34,21 +33,24 @@ import (
 	peer "github.com/libp2p/go-libp2p-core/peer"
 	pstore "github.com/libp2p/go-libp2p-core/peerstore"
 	routing "github.com/libp2p/go-libp2p-core/routing"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
+	ddht "github.com/libp2p/go-libp2p-kad-dht/dual"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	psrouter "github.com/libp2p/go-libp2p-pubsub-router"
 	record "github.com/libp2p/go-libp2p-record"
 	"github.com/libp2p/go-libp2p/p2p/discovery"
 	p2pbhost "github.com/libp2p/go-libp2p/p2p/host/basic"
+	ma "github.com/multiformats/go-multiaddr"
+	madns "github.com/multiformats/go-multiaddr-dns"
 
 	"github.com/ipfs/go-ipfs/core/bootstrap"
 	"github.com/ipfs/go-ipfs/core/node"
 	"github.com/ipfs/go-ipfs/core/node/libp2p"
 	"github.com/ipfs/go-ipfs/fuse/mount"
-	"github.com/ipfs/go-ipfs/namesys"
-	ipnsrp "github.com/ipfs/go-ipfs/namesys/republisher"
 	"github.com/ipfs/go-ipfs/p2p"
+	"github.com/ipfs/go-ipfs/peering"
 	"github.com/ipfs/go-ipfs/repo"
+	"github.com/ipfs/go-namesys"
+	ipnsrp "github.com/ipfs/go-namesys/republisher"
 )
 
 var log = logging.Logger("core")
@@ -83,18 +85,20 @@ type IpfsNode struct {
 
 	// Online
 	PeerHost      p2phost.Host            `optional:"true"` // the network host (server+client)
+	Peering       peering.PeeringService  `optional:"true"`
+	Filters       *ma.Filters             `optional:"true"`
 	Bootstrapper  io.Closer               `optional:"true"` // the periodic bootstrapper
 	Routing       routing.Routing         `optional:"true"` // the routing system. recommend ipfs-dht
+	DNSResolver   *madns.Resolver         // the DNS resolver
 	Exchange      exchange.Interface      // the block exchange + strategy (bitswap)
 	Namesys       namesys.NameSystem      // the name system, resolves paths to hashes
 	Provider      provider.System         // the value provider system
 	IpnsRepub     *ipnsrp.Republisher     `optional:"true"`
 	GraphExchange graphsync.GraphExchange `optional:"true"`
 
-	AutoNAT  *autonat.AutoNATService    `optional:"true"`
 	PubSub   *pubsub.PubSub             `optional:"true"`
 	PSRouter *psrouter.PubsubValueStore `optional:"true"`
-	DHT      *dht.IpfsDHT               `optional:"true"`
+	DHT      *ddht.DHT                  `optional:"true"`
 	P2P      *p2p.P2P                   `optional:"true"`
 
 	Process goprocess.Process
