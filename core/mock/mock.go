@@ -2,20 +2,26 @@ package coremock
 
 import (
 	"context"
+	"fmt"
+	"io/ioutil"
 
-	commands "github.com/ipfs/go-ipfs/commands"
-	core "github.com/ipfs/go-ipfs/core"
+	libp2p2 "github.com/ipfs/go-ipfs/core/node/libp2p"
+
+	"github.com/ipfs/go-ipfs/commands"
+	"github.com/ipfs/go-ipfs/core"
 	"github.com/ipfs/go-ipfs/repo"
 
-	config "gx/ipfs/QmPEpj17FDRpc7K1aArKZp3RsHtzRMKykeK9GVgn4WQGPR/go-ipfs-config"
-	peer "gx/ipfs/QmTRhk7cgjUf2gfQ3p2M9KPECNZEW9XUrmHcFCgog4cPgB/go-libp2p-peer"
-	pstore "gx/ipfs/QmTTJcDL3gsnGDALjh2fDGg1onGRUdVgNL2hU2WEZcVrMX/go-libp2p-peerstore"
-	libp2p "gx/ipfs/QmUDTcnDp2WssbmiDLC6aYurUeyt7QeRakHUQMxA2mZ5iB/go-libp2p"
-	mocknet "gx/ipfs/QmUDTcnDp2WssbmiDLC6aYurUeyt7QeRakHUQMxA2mZ5iB/go-libp2p/p2p/net/mock"
-	testutil "gx/ipfs/Qma6ESRQTf1ZLPgzpCwDTqQJefPnU6uLvMjP18vK8EWp8L/go-testutil"
-	datastore "gx/ipfs/QmaRb5yNXKonhbkpNxNawoydk4N6es6b4fPj19sjEKsh5D/go-datastore"
-	syncds "gx/ipfs/QmaRb5yNXKonhbkpNxNawoydk4N6es6b4fPj19sjEKsh5D/go-datastore/sync"
-	host "gx/ipfs/QmdJfsSbKSZnMkfZ1kpopiyB9i3Hd6cp8VKWZmtWPa7Moc/go-libp2p-host"
+	"github.com/ipfs/go-datastore"
+	syncds "github.com/ipfs/go-datastore/sync"
+	config "github.com/ipfs/go-ipfs-config"
+
+	"github.com/libp2p/go-libp2p"
+	host "github.com/libp2p/go-libp2p-core/host"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	pstore "github.com/libp2p/go-libp2p-core/peerstore"
+	testutil "github.com/libp2p/go-libp2p-testing/net"
+
+	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
 )
 
 // NewMockNode constructs an IpfsNode for use in tests.
@@ -29,7 +35,7 @@ func NewMockNode() (*core.IpfsNode, error) {
 	})
 }
 
-func MockHostOption(mn mocknet.Mocknet) core.HostOption {
+func MockHostOption(mn mocknet.Mocknet) libp2p2.HostOption {
 	return func(ctx context.Context, id peer.ID, ps pstore.Peerstore, _ ...libp2p.Option) (host.Host, error) {
 		return mn.AddPeerWithPeerstore(id, ps)
 	}
@@ -62,7 +68,6 @@ func MockCmdsCtx() (commands.Context, error) {
 	}
 
 	return commands.Context{
-		Online:     true,
 		ConfigRoot: "/tmp/.mockipfsconfig",
 		LoadConfig: func(path string) (*config.Config, error) {
 			return &conf, nil
@@ -71,4 +76,26 @@ func MockCmdsCtx() (commands.Context, error) {
 			return node, nil
 		},
 	}, nil
+}
+
+func MockPublicNode(ctx context.Context, mn mocknet.Mocknet) (*core.IpfsNode, error) {
+	ds := syncds.MutexWrap(datastore.NewMapDatastore())
+	cfg, err := config.Init(ioutil.Discard, 2048)
+	if err != nil {
+		return nil, err
+	}
+	count := len(mn.Peers())
+	cfg.Addresses.Swarm = []string{
+		fmt.Sprintf("/ip4/18.0.%d.%d/tcp/4001", count>>16, count&0xFF),
+	}
+	cfg.Datastore = config.Datastore{}
+	return core.NewNode(ctx, &core.BuildCfg{
+		Online:  true,
+		Routing: libp2p2.DHTServerOption,
+		Repo: &repo.Mock{
+			C: *cfg,
+			D: ds,
+		},
+		Host: MockHostOption(mn),
+	})
 }

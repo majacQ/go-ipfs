@@ -4,19 +4,16 @@ import (
 	"fmt"
 	"io"
 
-	core "github.com/ipfs/go-ipfs/core"
-	cmdenv "github.com/ipfs/go-ipfs/core/commands/cmdenv"
-	coreiface "github.com/ipfs/go-ipfs/core/coreapi/interface"
+	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
 	tar "github.com/ipfs/go-ipfs/tar"
 
-	cmds "gx/ipfs/QmSXUokcP4TJpFfqozT69AVAYRtzXVMUjzQVkYX41R9Svs/go-ipfs-cmds"
-	dag "gx/ipfs/QmSei8kFMfqdJq7Q68d2LMnHbTWKKg2daA29ezUYFAUNgc/go-merkledag"
-	"gx/ipfs/QmT3rzed1ppXefourpmoZ7tyVQfsGPQZ1pHDngLmCvXxd3/go-path"
-	cmdkit "gx/ipfs/Qmde5VP1qUkyQXKCfmEUA7bP64V2HAptbJ7phuPp7jXWwg/go-ipfs-cmdkit"
+	"github.com/ipfs/go-ipfs-cmds"
+	dag "github.com/ipfs/go-merkledag"
+	path "github.com/ipfs/interface-go-ipfs-core/path"
 )
 
 var TarCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "Utility functions for tar files in ipfs.",
 	},
 
@@ -27,7 +24,7 @@ var TarCmd = &cmds.Command{
 }
 
 var tarAddCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "Import a tar file into ipfs.",
 		ShortDescription: `
 'ipfs tar add' will parse a tar file and create a merkledag structure to
@@ -35,36 +32,41 @@ represent it.
 `,
 	},
 
-	Arguments: []cmdkit.Argument{
-		cmdkit.FileArg("file", true, false, "Tar file to add.").EnableStdin(),
+	Arguments: []cmds.Argument{
+		cmds.FileArg("file", true, false, "Tar file to add.").EnableStdin(),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
-		nd, err := cmdenv.GetNode(env)
+		api, err := cmdenv.GetApi(env, req)
 		if err != nil {
 			return err
 		}
 
-		fi, err := req.Files.NextFile()
+		enc, err := cmdenv.GetCidEncoder(req)
 		if err != nil {
 			return err
 		}
 
-		node, err := tar.ImportTar(req.Context, fi, nd.DAG)
+		it := req.Files.Entries()
+		file, err := cmdenv.GetFileArg(it)
+		if err != nil {
+			return err
+		}
+
+		node, err := tar.ImportTar(req.Context, file, api.Dag())
 		if err != nil {
 			return err
 		}
 
 		c := node.Cid()
 
-		fi.FileName()
-		return cmds.EmitOnce(res, &coreiface.AddEvent{
-			Name: fi.FileName(),
-			Hash: c.String(),
+		return cmds.EmitOnce(res, &AddEvent{
+			Name: it.Name(),
+			Hash: enc.Encode(c),
 		})
 	},
-	Type: coreiface.AddEvent{},
+	Type: AddEvent{},
 	Encoders: cmds.EncoderMap{
-		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, out *coreiface.AddEvent) error {
+		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, out *AddEvent) error {
 			fmt.Fprintln(w, out.Hash)
 			return nil
 		}),
@@ -72,28 +74,23 @@ represent it.
 }
 
 var tarCatCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "Export a tar file from IPFS.",
 		ShortDescription: `
 'ipfs tar cat' will export a tar file from a previously imported one in IPFS.
 `,
 	},
 
-	Arguments: []cmdkit.Argument{
-		cmdkit.StringArg("path", true, false, "ipfs path of archive to export.").EnableStdin(),
+	Arguments: []cmds.Argument{
+		cmds.StringArg("path", true, false, "ipfs path of archive to export.").EnableStdin(),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
-		nd, err := cmdenv.GetNode(env)
+		api, err := cmdenv.GetApi(env, req)
 		if err != nil {
 			return err
 		}
 
-		p, err := path.ParsePath(req.Arguments[0])
-		if err != nil {
-			return err
-		}
-
-		root, err := core.Resolve(req.Context, nd.Namesys, nd.Resolver, p)
+		root, err := api.ResolveNode(req.Context, path.New(req.Arguments[0]))
 		if err != nil {
 			return err
 		}
@@ -103,7 +100,7 @@ var tarCatCmd = &cmds.Command{
 			return dag.ErrNotProtobuf
 		}
 
-		r, err := tar.ExportTar(req.Context, rootpb, nd.DAG)
+		r, err := tar.ExportTar(req.Context, rootpb, api.Dag())
 		if err != nil {
 			return err
 		}

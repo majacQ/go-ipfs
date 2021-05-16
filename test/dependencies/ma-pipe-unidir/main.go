@@ -8,8 +8,8 @@ import (
 	"os"
 	"strconv"
 
-	ma "gx/ipfs/QmT4U94DnD8FRfqr21obWY32HLM5VExccPKMjQHofeYqr9/go-multiaddr"
-	manet "gx/ipfs/Qmaabb1tJZ2CX5cp6MuuiGgns71NYoxdgQP6Xdid1dVceC/go-multiaddr-net"
+	ma "github.com/multiformats/go-multiaddr"
+	manet "github.com/multiformats/go-multiaddr-net"
 )
 
 const USAGE = "ma-pipe-unidir [-l|--listen] [--pidFile=path] [-h|--help] <send|recv> <multiaddr>\n"
@@ -43,16 +43,6 @@ func app() int {
 		return 1
 	}
 
-	if len(opts.PidFile) > 0 {
-		data := []byte(strconv.Itoa(os.Getpid()))
-		err := ioutil.WriteFile(opts.PidFile, data, 0644)
-		if err != nil {
-			return 1
-		}
-
-		defer os.Remove(opts.PidFile)
-	}
-
 	maddr, err := ma.NewMultiaddr(addr)
 	if err != nil {
 		return 1
@@ -66,6 +56,16 @@ func app() int {
 			return 1
 		}
 
+		if len(opts.PidFile) > 0 {
+			data := []byte(strconv.Itoa(os.Getpid()))
+			err := ioutil.WriteFile(opts.PidFile, data, 0644)
+			if err != nil {
+				return 1
+			}
+
+			defer os.Remove(opts.PidFile)
+		}
+
 		conn, err = listener.Accept()
 		if err != nil {
 			return 1
@@ -76,15 +76,29 @@ func app() int {
 		if err != nil {
 			return 1
 		}
+
+		if len(opts.PidFile) > 0 {
+			data := []byte(strconv.Itoa(os.Getpid()))
+			err := ioutil.WriteFile(opts.PidFile, data, 0644)
+			if err != nil {
+				return 1
+			}
+
+			defer os.Remove(opts.PidFile)
+		}
+
 	}
 
 	defer conn.Close()
 	switch mode {
 	case "recv":
-		io.Copy(os.Stdout, conn)
+		_, err = io.Copy(os.Stdout, conn)
 	case "send":
-		io.Copy(conn, os.Stdin)
+		_, err = io.Copy(conn, os.Stdin)
 	default:
+		return 1
+	}
+	if err != nil {
 		return 1
 	}
 	return 0

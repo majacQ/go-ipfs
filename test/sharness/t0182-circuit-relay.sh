@@ -7,12 +7,12 @@ test_description="Test circuit relay"
 # start iptb + wait for peering
 NUM_NODES=3
 test_expect_success 'init iptb' '
-  iptb init -n $NUM_NODES --bootstrap=none --port=0
+  iptb testbed create -type localipfs -count $NUM_NODES -init
 '
 
 # Network toplogy: A <-> Relay <-> B
 test_expect_success 'start up nodes for configuration' '
-  iptb start --args --routing=none
+  iptb start -wait -- --routing=none
 '
 
 test_expect_success 'configure EnableRelayHop in relay node' '
@@ -22,7 +22,7 @@ test_expect_success 'configure EnableRelayHop in relay node' '
 test_expect_success 'restart nodes' '
   iptb stop &&
   iptb_wait_stop &&
-  iptb start --args --routing=none
+  iptb start -wait -- --routing=none
 '
 
 test_expect_success 'connect A <-> Relay' '
@@ -38,13 +38,13 @@ test_expect_success 'wait until relay is ready to do work' '
 '
 
 test_expect_success 'peer ids' '
-  PEERID_0=$(iptb get id 0) &&
-  PEERID_1=$(iptb get id 1) &&
-  PEERID_2=$(iptb get id 2)
+  PEERID_0=$(iptb attr get 0 id) &&
+  PEERID_1=$(iptb attr get 1 id) &&
+  PEERID_2=$(iptb attr get 2 id)
 '
 
 test_expect_success 'connect A <-Relay-> B' '
-  ipfsi 0 swarm connect /p2p-circuit/ipfs/$PEERID_2 > peers_out
+  ipfsi 0 swarm connect /p2p/$PEERID_1/p2p-circuit/p2p/$PEERID_2 > peers_out
 '
 
 test_expect_success 'output looks good' '
@@ -53,15 +53,13 @@ test_expect_success 'output looks good' '
 '
 
 test_expect_success 'peers for A look good' '
-  ipfsi 0 swarm peers | grep p2p-circuit > peers_out &&
-  echo "/ipfs/$PEERID_1/p2p-circuit/ipfs/$PEERID_2" > peers_exp &&
-  test_cmp peers_exp peers_out
+  ipfsi 0 swarm peers > peers_out &&
+  test_should_contain "/p2p/$PEERID_1/p2p-circuit/p2p/$PEERID_2$" peers_out
 '
 
 test_expect_success 'peers for B look good' '
-  ipfsi 2 swarm peers | grep p2p-circuit > peers_out &&
-  echo "/ipfs/$PEERID_1/p2p-circuit/ipfs/$PEERID_0" > peers_exp &&
-  test_cmp peers_exp peers_out
+  ipfsi 2 swarm peers > peers_out &&
+  test_should_contain "/p2p/$PEERID_1/p2p-circuit/p2p/$PEERID_0$" peers_out
 '
 
 test_expect_success 'add an object in A' '

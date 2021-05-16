@@ -3,24 +3,17 @@ package coreapi
 import (
 	"context"
 	"errors"
-	"strings"
-	"sync"
-	"time"
 
-	core "github.com/ipfs/go-ipfs/core"
-	coreiface "github.com/ipfs/go-ipfs/core/coreapi/interface"
-	caopts "github.com/ipfs/go-ipfs/core/coreapi/interface/options"
-
-	cid "gx/ipfs/QmPSQnBKM9g7BaUcZCvswUJVscQ1ipjmwxN5PXCjkp9EQ7/go-cid"
-	peer "gx/ipfs/QmTRhk7cgjUf2gfQ3p2M9KPECNZEW9XUrmHcFCgog4cPgB/go-libp2p-peer"
-	pstore "gx/ipfs/QmTTJcDL3gsnGDALjh2fDGg1onGRUdVgNL2hU2WEZcVrMX/go-libp2p-peerstore"
-	pubsub "gx/ipfs/QmY4dowpPFCBsbaoaJc9mNWso64eDJsm32LJznwPNaAiJG/go-libp2p-pubsub"
+	coreiface "github.com/ipfs/interface-go-ipfs-core"
+	caopts "github.com/ipfs/interface-go-ipfs-core/options"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	routing "github.com/libp2p/go-libp2p-core/routing"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
 type PubSubAPI CoreAPI
 
 type pubSubSubscription struct {
-	cancel       context.CancelFunc
 	subscription *pubsub.Subscription
 }
 
@@ -29,15 +22,17 @@ type pubSubMessage struct {
 }
 
 func (api *PubSubAPI) Ls(ctx context.Context) ([]string, error) {
-	if err := api.checkNode(); err != nil {
+	_, err := api.checkNode()
+	if err != nil {
 		return nil, err
 	}
 
-	return api.node.PubSub.GetTopics(), nil
+	return api.pubSub.GetTopics(), nil
 }
 
 func (api *PubSubAPI) Peers(ctx context.Context, opts ...caopts.PubSubPeersOption) ([]peer.ID, error) {
-	if err := api.checkNode(); err != nil {
+	_, err := api.checkNode()
+	if err != nil {
 		return nil, err
 	}
 
@@ -46,91 +41,57 @@ func (api *PubSubAPI) Peers(ctx context.Context, opts ...caopts.PubSubPeersOptio
 		return nil, err
 	}
 
-	peers := api.node.PubSub.ListPeers(settings.Topic)
-	out := make([]peer.ID, len(peers))
-
-	for i, peer := range peers {
-		out[i] = peer
-	}
-
-	return out, nil
+	return api.pubSub.ListPeers(settings.Topic), nil
 }
 
 func (api *PubSubAPI) Publish(ctx context.Context, topic string, data []byte) error {
-	if err := api.checkNode(); err != nil {
+	_, err := api.checkNode()
+	if err != nil {
 		return err
 	}
 
-	return api.node.PubSub.Publish(topic, data)
+	//nolint deprecated
+	return api.pubSub.Publish(topic, data)
 }
 
 func (api *PubSubAPI) Subscribe(ctx context.Context, topic string, opts ...caopts.PubSubSubscribeOption) (coreiface.PubSubSubscription, error) {
-	options, err := caopts.PubSubSubscribeOptions(opts...)
-
-	if err := api.checkNode(); err != nil {
-		return nil, err
-	}
-
-	sub, err := api.node.PubSub.Subscribe(topic)
+	// Parse the options to avoid introducing silent failures for invalid
+	// options. However, we don't currently have any use for them. The only
+	// subscription option, discovery, is now a no-op as it's handled by
+	// pubsub itself.
+	_, err := caopts.PubSubSubscribeOptions(opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	pubctx, cancel := context.WithCancel(api.node.Context())
-
-	if options.Discover {
-		go func() {
-			blk, err := api.core().Block().Put(pubctx, strings.NewReader("floodsub:"+topic))
-			if err != nil {
-				log.Error("pubsub discovery: ", err)
-				return
-			}
-
-			connectToPubSubPeers(pubctx, api.node, blk.Path().Cid())
-		}()
+	_, err = api.checkNode()
+	if err != nil {
+		return nil, err
 	}
 
-	return &pubSubSubscription{cancel, sub}, nil
+	//nolint deprecated
+	sub, err := api.pubSub.Subscribe(topic)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pubSubSubscription{sub}, nil
 }
 
-func connectToPubSubPeers(ctx context.Context, n *core.IpfsNode, cid cid.Cid) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	provs := n.Routing.FindProvidersAsync(ctx, cid, 10)
-	var wg sync.WaitGroup
-	for p := range provs {
-		wg.Add(1)
-		go func(pi pstore.PeerInfo) {
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(ctx, time.Second*10)
-			defer cancel()
-			err := n.PeerHost.Connect(ctx, pi)
-			if err != nil {
-				log.Info("pubsub discover: ", err)
-				return
-			}
-			log.Info("connected to pubsub peer:", pi.ID)
-		}(p)
+func (api *PubSubAPI) checkNode() (routing.Routing, error) {
+	if api.pubSub == nil {
+		return nil, errors.New("experimental pubsub feature not enabled. Run daemon with --enable-pubsub-experiment to use.")
 	}
 
-	wg.Wait()
-}
-
-func (api *PubSubAPI) checkNode() error {
-	if !api.node.OnlineMode() {
-		return coreiface.ErrOffline
+	err := api.checkOnline(false)
+	if err != nil {
+		return nil, err
 	}
 
-	if api.node.PubSub == nil {
-		return errors.New("experimental pubsub feature not enabled. Run daemon with --enable-pubsub-experiment to use.")
-	}
-
-	return nil
+	return api.routing, nil
 }
 
 func (sub *pubSubSubscription) Close() error {
-	sub.cancel()
 	sub.subscription.Cancel()
 	return nil
 }
@@ -157,9 +118,9 @@ func (msg *pubSubMessage) Seq() []byte {
 }
 
 func (msg *pubSubMessage) Topics() []string {
-	return msg.msg.TopicIDs
-}
-
-func (api *PubSubAPI) core() coreiface.CoreAPI {
-	return (*CoreAPI)(api)
+	// TODO: handle breaking downstream changes by returning a single string.
+	if msg.msg.Topic == nil {
+		return nil
+	}
+	return []string{*msg.msg.Topic}
 }

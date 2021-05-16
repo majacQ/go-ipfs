@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,12 +18,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	ci "gx/ipfs/QmPvyPwuCgJ7pDmrKDxRtsScJgBaM5h4EpRL2qQJsmXf4n/go-libp2p-crypto"
-	peer "gx/ipfs/QmTRhk7cgjUf2gfQ3p2M9KPECNZEW9XUrmHcFCgog4cPgB/go-libp2p-peer"
-	pstore "gx/ipfs/QmTTJcDL3gsnGDALjh2fDGg1onGRUdVgNL2hU2WEZcVrMX/go-libp2p-peerstore"
-	pstoremem "gx/ipfs/QmTTJcDL3gsnGDALjh2fDGg1onGRUdVgNL2hU2WEZcVrMX/go-libp2p-peerstore/pstoremem"
-	secio "gx/ipfs/QmXVoVfwEXZdG9zNNHE9in55SepeSJM5GSETEyWNSNMygc/go-libp2p-secio"
-	logging "gx/ipfs/QmZChCsSt8DctjceaL56Eibc29CVQq4dGKRXC5JRZ6Ppae/go-log"
+	logging "github.com/ipfs/go-log"
+	ci "github.com/libp2p/go-libp2p-core/crypto"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	pstore "github.com/libp2p/go-libp2p-core/peerstore"
+	pstoremem "github.com/libp2p/go-libp2p-peerstore/pstoremem"
+	secio "github.com/libp2p/go-libp2p-secio"
 )
 
 var verbose = false
@@ -113,8 +112,8 @@ func main() {
 }
 
 func setupPeer(a args) (peer.ID, pstore.Peerstore, error) {
-	if a.keybits < 1024 {
-		return "", nil, errors.New("bitsize less than 1024 is considered unsafe")
+	if a.keybits < ci.MinRsaKeyBits {
+		return "", nil, ci.ErrRsaKeyTooSmall
 	}
 
 	out("generating key pair...")
@@ -129,8 +128,14 @@ func setupPeer(a args) (peer.ID, pstore.Peerstore, error) {
 	}
 
 	ps := pstoremem.NewPeerstore()
-	ps.AddPrivKey(p, sk)
-	ps.AddPubKey(p, pk)
+	err = ps.AddPrivKey(p, sk)
+	if err != nil {
+		return "", nil, err
+	}
+	err = ps.AddPubKey(p, pk)
+	if err != nil {
+		return "", nil, err
+	}
 
 	out("local peer id: %s", p)
 	return p, ps, nil
@@ -238,8 +243,7 @@ func netcat(c io.ReadWriteCloser) {
 
 	// wait until we exit.
 	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGHUP, syscall.SIGINT,
-		syscall.SIGTERM, syscall.SIGQUIT)
+	signal.Notify(sigc, notifySignals...)
 
 	select {
 	case <-done:
