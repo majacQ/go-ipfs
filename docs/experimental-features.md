@@ -22,10 +22,10 @@ the above issue.
 - [Plugins](#plugins)
 - [Directory Sharding / HAMT](#directory-sharding--hamt)
 - [IPNS PubSub](#ipns-pubsub)
-- [QUIC](#quic)
 - [AutoRelay](#autorelay)
 - [Strategic Providing](#strategic-providing)
 - [Graphsync](#graphsync)
+- [Noise](#noise)
 
 ---
 
@@ -463,35 +463,6 @@ run your daemon with the `--enable-namesys-pubsub` flag; enables pubsub.
 - [ ] Needs more people to use and report on how well it works
 - [ ] Pubsub enabled as a real feature
 
-## QUIC
-
-### In Version
-
-0.4.18
-
-### State
-
-Candidate, disabled by default but it will be enabled by default in 0.6.0.
-
-### How to enable
-
-Modify your ipfs config:
-
-```
-ipfs config --json Experimental.QUIC true
-```
-
-For listening on a QUIC address, add it to the swarm addresses, e.g. `/ip4/0.0.0.0/udp/4001/quic`.
-
-
-### Road to being a real feature
-
-- [ ] The IETF QUIC specification needs to be finalized.
-- [ ] Make sure QUIC connections work reliably
-- [ ] Make sure QUIC connection offer equal or better performance than TCP connections on real-world networks
-- [ ] Finalize libp2p-TLS handshake spec.
-
-
 ## AutoRelay
 
 ### In Version
@@ -525,7 +496,7 @@ NOTE: Ensuring `Swarm.EnableRelayHop` is _false_ is extremely important here. If
 
 Experimental, disabled by default.
 
-Replaces the existing provide mechanism with a robust, strategic provider system.
+Replaces the existing provide mechanism with a robust, strategic provider system. Currently enabling this option will provide nothing.
 
 ### How to enable
 
@@ -568,3 +539,11 @@ ipfs config --json Experimental.GraphsyncEnabled true
 ### Road to being a real feature
 
 - [ ] We need to confirm that it can't be used to DoS a node. The server-side logic for GraphSync is quite complex and, if we're not careful, the server might end up performing unbounded work when responding to a malicious request.
+
+## Noise
+
+### State
+
+Stable, enabled by default
+
+[Noise](https://github.com/libp2p/specs/tree/master/noise) libp2p transport based on the [Noise Protocol Framework](https://noiseprotocol.org/noise.html). While TLS remains the default transport in go-ipfs, Noise is easier to implement and is thus the "interop" transport between IPFS and libp2p implementations.

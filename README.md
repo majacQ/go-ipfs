@@ -1,6 +1,6 @@
 # go-ipfs
 
-![banner](https://ipfs.io/ipfs/QmVk7srrwahXLNmcDYvyUEJptyoxpndnRa57YJ11L4jV26/ipfs.go.png)
+![banner](https://ipfs.io/ipfs/bafykbzacecaesuqmivkauix25v6i6xxxsvsrtxknhgb5zak3xxsg2nb4dhs2u/ipfs.go.png)
 
 [![](https://img.shields.io/badge/made%20by-Protocol%20Labs-blue.svg?style=flat-square)](http://ipn.io)
 [![Matrix](https://img.shields.io/badge/matrix-%23ipfs%3Amatrix.org-blue.svg?style=flat-square)](https://matrix.to/#/room/#ipfs:matrix.org)
@@ -160,7 +160,7 @@ PS> scoop install go-ipfs
 
 ### Build from Source
 
-go-ipfs's build system requires Go 1.13 and some standard POSIX build tools:
+go-ipfs's build system requires Go 1.14.4 and some standard POSIX build tools:
 
 * GNU make
 * Git
@@ -170,7 +170,7 @@ To build without GCC, build with `CGO_ENABLED=0` (e.g., `make build CGO_ENABLED=
 
 #### Install Go
 
-The build process for ipfs requires Go 1.14.2 or higher. If you don't have it: [Download Go 1.14+](https://golang.org/dl/).
+The build process for ipfs requires Go 1.14.4 or higher. If you don't have it: [Download Go 1.14+](https://golang.org/dl/).
 
 You'll need to add Go's bin directories to your `$PATH` environment variable e.g., by adding these lines to your `/etc/profile` (for a system-wide installation) or `$HOME/.profile`:
 
@@ -224,7 +224,7 @@ dependencies as well.
   (See https://github.com/ipfs/go-ipfs/issues/177)
 - For more details on setting up FUSE (so that you can mount the filesystem), see the docs folder.
 - Shell command completion is available in `misc/completion/ipfs-completion.bash`. Read [docs/command-completion.md](docs/command-completion.md) to learn how to install it.
-- See the [init examples](https://github.com/ipfs/website/tree/master/static/docs/examples/init) for how to connect IPFS to systemd or whatever init system your distro uses.
+- See the [misc folder](https://github.com/ipfs/go-ipfs/tree/master/misc) for how to connect IPFS to systemd or whatever init system your distro uses.
 
 ### Updating go-ipfs
 
@@ -288,29 +288,34 @@ Basic proof of 'ipfs working' locally:
 
 SUBCOMMANDS
   BASIC COMMANDS
-    init          Initialize ipfs local configuration
-    add <path>    Add a file to ipfs
-    cat <ref>     Show ipfs object data
-    get <ref>     Download ipfs objects
+    init          Initialize local IPFS configuration
+    add <path>    Add a file to IPFS
+    cat <ref>     Show IPFS object data
+    get <ref>     Download IPFS objects
     ls <ref>      List links from an object
     refs <ref>    List hashes of links from an object
 
   DATA STRUCTURE COMMANDS
+    dag           Interact with IPLD DAG nodes
+    files         Interact with files as if they were a unix filesystem
+    object        Interact with dag-pb objects (deprecated, use 'dag' or 'files')
     block         Interact with raw blocks in the datastore
-    object        Interact with raw dag nodes
-    files         Interact with objects as if they were a unix filesystem
 
   ADVANCED COMMANDS
     daemon        Start a long-running daemon process
-    mount         Mount an ipfs read-only mount point
+    mount         Mount an IPFS read-only mount point
     resolve       Resolve any type of name
-    name          Publish or resolve IPNS names
+    name          Publish and resolve IPNS names
+    key           Create and list IPNS name keypairs
     dns           Resolve DNS links
     pin           Pin objects to local storage
-    repo          Manipulate an IPFS repository
+    repo          Manipulate the IPFS repository
+    stats         Various operational stats
+    p2p           Libp2p stream mounting
+    filestore     Manage the filestore (experimental)
 
   NETWORK COMMANDS
-    id            Show info about ipfs peers
+    id            Show info about IPFS peers
     bootstrap     Add or remove bootstrap peers
     swarm         Manage connections to the p2p network
     dht           Query the DHT for values or peers
@@ -319,9 +324,11 @@ SUBCOMMANDS
 
   TOOL COMMANDS
     config        Manage configuration
-    version       Show ipfs version information
+    version       Show IPFS version information
     update        Download and apply go-ipfs updates
     commands      List all available commands
+    cid           Convert and discover properties of CIDs
+    log           Manage and show logs of running daemon
 
   Use 'ipfs <command> --help' to learn more about each command.
 
@@ -344,7 +351,7 @@ IPFS files that will persist when you restart the container.
 
 Start a container running ipfs and expose ports 4001, 5001 and 8080:
 
-    docker run -d --name ipfs_host -v $ipfs_staging:/export -v $ipfs_data:/data/ipfs -p 4001:4001 -p 127.0.0.1:8080:8080 -p 127.0.0.1:5001:5001 ipfs/go-ipfs:latest
+    docker run -d --name ipfs_host -v $ipfs_staging:/export -v $ipfs_data:/data/ipfs -p 4001:4001 -p 4001:4001/udp -p 127.0.0.1:8080:8080 -p 127.0.0.1:5001:5001 ipfs/go-ipfs:latest
 
 Watch the ipfs log:
 
@@ -376,16 +383,32 @@ Stop the running container:
 
 When starting a container running ipfs for the first time with an empty data directory, it will call `ipfs init` to initialize configuration files and generate a new keypair. At this time, you can choose which profile to apply using the `IPFS_PROFILE` environment variable:
 
-    docker run -d --name ipfs_host -e IPFS_PROFILE=server -v $ipfs_staging:/export -v $ipfs_data:/data/ipfs -p 4001:4001 -p 127.0.0.1:8080:8080 -p 127.0.0.1:5001:5001 ipfs/go-ipfs:latest
+    docker run -d --name ipfs_host -e IPFS_PROFILE=server -v $ipfs_staging:/export -v $ipfs_data:/data/ipfs -p 4001:4001 -p 4001:4001/udp -p 127.0.0.1:8080:8080 -p 127.0.0.1:5001:5001 ipfs/go-ipfs:latest
+
+#### Private swarms inside Docker
 
 It is possible to initialize the container with a swarm key file (`/data/ipfs/swarm.key`) using the variables `IPFS_SWARM_KEY` and `IPFS_SWARM_KEY_FILE`. The `IPFS_SWARM_KEY` creates `swarm.key` with the contents of the variable itself, whilst `IPFS_SWARM_KEY_FILE` copies the key from a path stored in the variable. The `IPFS_SWARM_KEY_FILE` **overwrites** the key generated by `IPFS_SWARM_KEY`.
 
-    docker run -d --name ipfs_host -e IPFS_SWARM_KEY=<your swarm key> -v $ipfs_staging:/export -v $ipfs_data:/data/ipfs -p 4001:4001 -p 127.0.0.1:8080:8080 -p 127.0.0.1:5001:5001 ipfs/go-ipfs:latest
+    docker run -d --name ipfs_host -e IPFS_SWARM_KEY=<your swarm key> -v $ipfs_staging:/export -v $ipfs_data:/data/ipfs -p 4001:4001 -p 4001:4001/udp -p 127.0.0.1:8080:8080 -p 127.0.0.1:5001:5001 ipfs/go-ipfs:latest
 
 The swarm key initialization can also be done using docker secrets **(requires docker swarm or docker-compose)**:
 
     cat your_swarm.key | docker secret create swarm_key_secret -
-    docker run -d --name ipfs_host --secret swarm_key_secret -e IPFS_SWARM_KEY_FILE=/run/secrets/swarm_key_secret -v $ipfs_staging:/export -v $ipfs_data:/data/ipfs -p 4001:4001 -p 127.0.0.1:8080:8080 -p 127.0.0.1:5001:5001 ipfs/go-ipfs:latest
+    docker run -d --name ipfs_host --secret swarm_key_secret -e IPFS_SWARM_KEY_FILE=/run/secrets/swarm_key_secret -v $ipfs_staging:/export -v $ipfs_data:/data/ipfs -p 4001:4001 -p 4001:4001/udp -p 127.0.0.1:8080:8080 -p 127.0.0.1:5001:5001 ipfs/go-ipfs:latest
+
+#### Key rotation inside Docker
+
+If needed, it is possible to do key rotation in an ephemeral container that is temporarily executing against a volume that is mounted under `/data/ipfs`:
+
+```sh
+# given container named 'ipfs-test' that persists repo at /path/to/persisted/.ipfs
+$ docker run -d --name ipfs-test -v /path/to/persisted/.ipfs:/data/ipfs ipfs/go-ipfs:v0.7.0 
+$ docker stop ipfs-test  
+
+# key rotation works like this (old key saved under 'old-self')
+$ docker run --rm -it -v /path/to/persisted/.ipfs:/data/ipfs ipfs/go-ipfs:v0.7.0 key rotate -o old-self -t ed25519
+$ docker start ipfs-test # will start with the new key
+```
 
 ### Troubleshooting
 

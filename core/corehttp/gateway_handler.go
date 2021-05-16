@@ -3,6 +3,7 @@ package corehttp
 import (
 	"context"
 	"fmt"
+	"html/template"
 	"io"
 	"mime"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/ipfs/go-cid"
 	files "github.com/ipfs/go-ipfs-files"
+	assets "github.com/ipfs/go-ipfs/assets"
 	dag "github.com/ipfs/go-merkledag"
 	mfs "github.com/ipfs/go-mfs"
 	path "github.com/ipfs/go-path"
@@ -32,6 +34,28 @@ const (
 	ipfsPathPrefix = "/ipfs/"
 	ipnsPathPrefix = "/ipns/"
 )
+
+var onlyAscii = regexp.MustCompile("[[:^ascii:]]")
+
+// HTML-based redirect for errors which can be recovered from, but we want
+// to provide hint to people that they should fix things on their end.
+var redirectTemplate = template.Must(template.New("redirect").Parse(`<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta http-equiv="refresh" content="10;url={{.RedirectURL}}" />
+		<link rel="canonical" href="{{.RedirectURL}}" />
+	</head>
+	<body>
+		<pre>{{.ErrorMsg}}</pre><pre>(if a redirect does not happen in 10 seconds, use "{{.SuggestedPath}}" instead)</pre>
+	</body>
+</html>`))
+
+type redirectTemplateData struct {
+	RedirectURL   string
+	SuggestedPath string
+	ErrorMsg      string
+}
 
 // gatewayHandler is a HTTP handler that serves IPFS objects (accessible by default at /ipfs/<path>)
 // (it serves requests like GET /ipfs/QmVRzPKPzNtSrEzBFm2UZfxmPAgnaLke4DMcerbsGGSaFe/link)
@@ -156,6 +180,7 @@ func (i *gatewayHandler) getOrHeadHandler(w http.ResponseWriter, r *http.Request
 	// If the gateway is behind a reverse proxy and mounted at a sub-path,
 	// the prefix header can be set to signal this sub-path.
 	// It will be prepended to links in directory listings and the index.html redirect.
+	// TODO: this feature is deprecated and will be removed  (https://github.com/ipfs/go-ipfs/issues/7702)
 	prefix := ""
 	if prfx := r.Header.Get("X-Ipfs-Gateway-Prefix"); len(prfx) > 0 {
 		for _, p := range i.config.PathPrefixes {
@@ -178,6 +203,28 @@ func (i *gatewayHandler) getOrHeadHandler(w http.ResponseWriter, r *http.Request
 	}
 	originalUrlPath := prefix + requestURI.Path
 
+	// ?uri query param support for requests produced by web browsers
+	// via navigator.registerProtocolHandler Web API
+	// https://developer.mozilla.org/en-US/docs/Web/API/Navigator/registerProtocolHandler
+	// TLDR: redirect /ipfs/?uri=ipfs%3A%2F%2Fcid%3Fquery%3Dval to /ipfs/cid?query=val
+	if uriParam := r.URL.Query().Get("uri"); uriParam != "" {
+		u, err := url.Parse(uriParam)
+		if err != nil {
+			webError(w, "failed to parse uri query parameter", err, http.StatusBadRequest)
+			return
+		}
+		if u.Scheme != "ipfs" && u.Scheme != "ipns" {
+			webError(w, "uri query parameter scheme must be ipfs or ipns", err, http.StatusBadRequest)
+			return
+		}
+		path := u.Path
+		if u.RawQuery != "" { // preserve query if present
+			path = path + "?" + u.RawQuery
+		}
+		http.Redirect(w, r, gopath.Join("/", prefix, u.Scheme, u.Host, path), http.StatusMovedPermanently)
+		return
+	}
+
 	// Service Worker registration request
 	if r.Header.Get("Service-Worker") == "script" {
 		// Disallow Service Worker registration on namespace roots
@@ -191,8 +238,14 @@ func (i *gatewayHandler) getOrHeadHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	parsedPath := ipath.New(urlPath)
-	if err := parsedPath.IsValid(); err != nil {
-		webError(w, "invalid ipfs path", err, http.StatusBadRequest)
+	if pathErr := parsedPath.IsValid(); pathErr != nil {
+		if prefix == "" && fixupSuperfluousNamespace(w, urlPath, r.URL.RawQuery) {
+			// the error was due to redundant namespace, which we were able to fix
+			// by returning error/redirect page, nothing left to do here
+			return
+		}
+		// unable to fix path, returning error
+		webError(w, "invalid ipfs path", pathErr, http.StatusBadRequest)
 		return
 	}
 
@@ -222,16 +275,26 @@ func (i *gatewayHandler) getOrHeadHandler(w http.ResponseWriter, r *http.Request
 
 	defer dr.Close()
 
-	// Check etag send back to us
-	etag := "\"" + resolvedPath.Cid().String() + "\""
-	if r.Header.Get("If-None-Match") == etag || r.Header.Get("If-None-Match") == "W/"+etag {
+	var responseEtag string
+
+	// we need to figure out whether this is a directory before doing most of the heavy lifting below
+	_, ok := dr.(files.Directory)
+
+	if ok && assets.BindataVersionHash != "" {
+		responseEtag = `"DirIndex-` + assets.BindataVersionHash + `_CID-` + resolvedPath.Cid().String() + `"`
+	} else {
+		responseEtag = `"` + resolvedPath.Cid().String() + `"`
+	}
+
+	// Check etag sent back to us
+	if r.Header.Get("If-None-Match") == responseEtag || r.Header.Get("If-None-Match") == `W/`+responseEtag {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
 	i.addUserHeaders(w) // ok, _now_ write user's headers.
 	w.Header().Set("X-IPFS-Path", urlPath)
-	w.Header().Set("Etag", etag)
+	w.Header().Set("Etag", responseEtag)
 
 	// set these headers _after_ the error, for we may just not have it
 	// and don't want the client to cache a 500 response...
@@ -250,7 +313,13 @@ func (i *gatewayHandler) getOrHeadHandler(w http.ResponseWriter, r *http.Request
 		urlFilename := r.URL.Query().Get("filename")
 		var name string
 		if urlFilename != "" {
-			w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename*=UTF-8''%s", url.PathEscape(urlFilename)))
+			disposition := "inline"
+			if r.URL.Query().Get("download") == "true" {
+				disposition = "attachment"
+			}
+			utf8Name := url.PathEscape(urlFilename)
+			asciiName := url.PathEscape(onlyAscii.ReplaceAllLiteralString(urlFilename, "_"))
+			w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, asciiName, utf8Name))
 			name = urlFilename
 		} else {
 			name = getFilename(urlPath)
@@ -271,7 +340,12 @@ func (i *gatewayHandler) getOrHeadHandler(w http.ResponseWriter, r *http.Request
 		goget := r.URL.Query().Get("go-get") == "1"
 		if dirwithoutslash && !goget {
 			// See comment above where originalUrlPath is declared.
-			http.Redirect(w, r, originalUrlPath+"/", 302)
+			suffix := "/"
+			if r.URL.RawQuery != "" {
+				// preserve query parameters
+				suffix = suffix + "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, originalUrlPath+suffix, 302)
 			return
 		}
 
@@ -291,11 +365,19 @@ func (i *gatewayHandler) getOrHeadHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if r.Method == http.MethodHead {
+	// See statusResponseWriter.WriteHeader
+	// and https://github.com/ipfs/go-ipfs/issues/7164
+	// Note: this needs to occur before listingTemplate.Execute otherwise we get
+	// superfluous response.WriteHeader call from prometheus/client_golang
+	if w.Header().Get("Location") != "" {
+		w.WriteHeader(http.StatusMovedPermanently)
 		return
 	}
 
-	if i.servePretty404IfPresent(w, r, parsedPath) {
+	// A HTML directory index will be presented, be sure to set the correct
+	// type instead of relying on autodetection (which may fail).
+	w.Header().Set("Content-Type", "text/html")
+	if r.Method == http.MethodHead {
 		return
 	}
 
@@ -309,8 +391,20 @@ func (i *gatewayHandler) getOrHeadHandler(w http.ResponseWriter, r *http.Request
 			size = humanize.Bytes(uint64(s))
 		}
 
+		hash := ""
+		if r, err := i.api.ResolvePath(r.Context(), ipath.Join(resolvedPath, dirit.Name())); err == nil {
+			// Path may not be resolved. Continue anyways.
+			hash = r.Cid().String()
+		}
+
 		// See comment above where originalUrlPath is declared.
-		di := directoryItem{size, dirit.Name(), gopath.Join(originalUrlPath, dirit.Name())}
+		di := directoryItem{
+			Size:      size,
+			Name:      dirit.Name(),
+			Path:      gopath.Join(originalUrlPath, dirit.Name()),
+			Hash:      hash,
+			ShortHash: shortHash(hash),
+		}
 		dirListing = append(dirListing, di)
 	}
 	if dirit.Err() != nil {
@@ -340,23 +434,38 @@ func (i *gatewayHandler) getOrHeadHandler(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	size := "?"
+	if s, err := dir.Size(); err == nil {
+		// Size may not be defined/supported. Continue anyways.
+		size = humanize.Bytes(uint64(s))
+	}
+
 	hash := resolvedPath.Cid().String()
+
+	// Gateway root URL to be used when linking to other rootIDs.
+	// This will be blank unless subdomain or DNSLink resolution is being used
+	// for this request.
+	var gwURL string
+
+	// Get gateway hostname and build gateway URL.
+	if h, ok := r.Context().Value("gw-hostname").(string); ok {
+		gwURL = "//" + h
+	} else {
+		gwURL = ""
+	}
+
+	dnslink := hasDNSLinkOrigin(gwURL, urlPath)
 
 	// See comment above where originalUrlPath is declared.
 	tplData := listingTemplateData{
-		Listing:  dirListing,
-		Path:     urlPath,
-		BackLink: backLink,
-		Hash:     hash,
-	}
-
-	// See statusResponseWriter.WriteHeader
-	// and https://github.com/ipfs/go-ipfs/issues/7164
-	// Note: this needs to occur before listingTemplate.Execute otherwise we get
-	// superfluous response.WriteHeader call from prometheus/client_golang
-	if w.Header().Get("Location") != "" {
-		w.WriteHeader(http.StatusMovedPermanently)
-		return
+		GatewayURL:  gwURL,
+		DNSLink:     dnslink,
+		Listing:     dirListing,
+		Size:        size,
+		Path:        urlPath,
+		Breadcrumbs: breadcrumbs(urlPath, dnslink),
+		BackLink:    backLink,
+		Hash:        hash,
 	}
 
 	err = listingTemplate.Execute(w, tplData)
@@ -699,4 +808,34 @@ func preferred404Filename(acceptHeaders []string) (string, string, error) {
 	}
 
 	return "", "", fmt.Errorf("there is no 404 file for the requested content types")
+}
+
+// Attempt to fix redundant /ipfs/ namespace as long as resulting
+// 'intended' path is valid.  This is in case gremlins were tickled
+// wrong way and user ended up at /ipfs/ipfs/{cid} or /ipfs/ipns/{id}
+// like in bafybeien3m7mdn6imm425vc2s22erzyhbvk5n3ofzgikkhmdkh5cuqbpbq :^))
+func fixupSuperfluousNamespace(w http.ResponseWriter, urlPath string, urlQuery string) bool {
+	if !(strings.HasPrefix(urlPath, "/ipfs/ipfs/") || strings.HasPrefix(urlPath, "/ipfs/ipns/")) {
+		return false // not a superfluous namespace
+	}
+	intendedPath := ipath.New(strings.TrimPrefix(urlPath, "/ipfs"))
+	if err := intendedPath.IsValid(); err != nil {
+		return false // not a valid path
+	}
+	intendedURL := intendedPath.String()
+	if urlQuery != "" {
+		// we render HTML, so ensure query entries are properly escaped
+		q, _ := url.ParseQuery(urlQuery)
+		intendedURL = intendedURL + "?" + q.Encode()
+	}
+	// return HTTP 400 (Bad Request) with HTML error page that:
+	// - points at correct canonical path via <link> header
+	// - displays human-readable error
+	// - redirects to intendedURL after a short delay
+	w.WriteHeader(http.StatusBadRequest)
+	return redirectTemplate.Execute(w, redirectTemplateData{
+		RedirectURL:   intendedURL,
+		SuggestedPath: intendedPath.String(),
+		ErrorMsg:      fmt.Sprintf("invalid path: %q should be %q", urlPath, intendedPath.String()),
+	}) == nil
 }
