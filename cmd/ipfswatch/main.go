@@ -1,3 +1,5 @@
+// +build !plan9
+
 package main
 
 import (
@@ -103,7 +105,7 @@ func run(ipfsPath, watchPath string) error {
 		})
 	}
 
-	interrupts := make(chan os.Signal)
+	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt, syscall.SIGTERM)
 
 	for {
@@ -129,7 +131,9 @@ func run(ipfsPath, watchPath string) error {
 				switch e.Op {
 				case fsnotify.Create:
 					if isDir {
-						addTree(watcher, e.Name)
+						if err := addTree(watcher, e.Name); err != nil {
+							return err
+						}
 					}
 				}
 				proc.Go(func(p process.Process) {
@@ -167,6 +171,10 @@ func run(ipfsPath, watchPath string) error {
 
 func addTree(w *fsnotify.Watcher, root string) error {
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			log.Println(err)
+			return nil
+		}
 		isDir, err := IsDirectory(path)
 		if err != nil {
 			log.Println(err)

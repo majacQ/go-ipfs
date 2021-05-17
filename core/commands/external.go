@@ -8,16 +8,16 @@ import (
 	"os/exec"
 	"strings"
 
-	cmdkit "github.com/ipfs/go-ipfs-cmdkit"
 	cmds "github.com/ipfs/go-ipfs-cmds"
 )
 
-func ExternalBinary() *cmds.Command {
+func ExternalBinary(instructions string) *cmds.Command {
 	return &cmds.Command{
-		Arguments: []cmdkit.Argument{
-			cmdkit.StringArg("args", false, true, "Arguments for subcommand."),
+		Arguments: []cmds.Argument{
+			cmds.StringArg("args", false, true, "Arguments for subcommand."),
 		},
 		External: true,
+		NoRemote: true,
 		Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
 			binname := strings.Join(append([]string{"ipfs"}, req.Path...), "-")
 			_, err := exec.LookPath(binname)
@@ -28,7 +28,7 @@ func ExternalBinary() *cmds.Command {
 						buf := new(bytes.Buffer)
 						fmt.Fprintf(buf, "%s is an 'external' command.\n", binname)
 						fmt.Fprintf(buf, "It does not currently appear to be installed.\n")
-						fmt.Fprintf(buf, "Please refer to the ipfs documentation for instructions.\n")
+						fmt.Fprintf(buf, "%s\n", instructions)
 						return res.Emit(buf)
 					}
 				}

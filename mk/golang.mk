@@ -1,18 +1,25 @@
 # golang utilities
-GO_MIN_VERSION = 1.11.4
+GO_MIN_VERSION = 1.14.4
 export GO111MODULE=on
 
 
 # pre-definitions
 GOCC ?= go
 GOTAGS ?=
-unexport GOFLAGS
-GOFLAGS ?=
 GOTFLAGS ?=
+
+# Unexport GOFLAGS so we only apply it where we actually want it.
+unexport GOFLAGS
+# Override so we can combine with the user's go flags.
+# Try to make building as reproducible as possible by stripping the go path.
+override GOFLAGS += "-asmflags=all='-trimpath=$(GOPATH)'" "-gcflags=all='-trimpath=$(GOPATH)'"
+
+ifeq ($(tarball-is),1)
+	GOFLAGS += -mod=vendor
+endif
 
 # match Go's default GOPATH behaviour
 export GOPATH ?= $(shell $(GOCC) env GOPATH)
-export GOBIN = $(abspath bin)
 
 DEPS_GO :=
 TEST_GO :=
@@ -43,6 +50,8 @@ test_go_test: $$(DEPS_GO)
 	$(GOCC) test $(go-flags-with-tags) $(GOTFLAGS) ./...
 .PHONY: test_go_test
 
+test_go_build: $$(TEST_GO_BUILD)
+
 test_go_short: GOTFLAGS += -test.short
 test_go_short: test_go_test
 .PHONY: test_go_short
@@ -51,7 +60,7 @@ test_go_race: GOTFLAGS += -race
 test_go_race: test_go_test
 .PHONY: test_go_race
 
-test_go_expensive: test_go_test $$(TEST_GO_BUILD)
+test_go_expensive: test_go_test test_go_build
 .PHONY: test_go_expensive
 TEST_GO += test_go_expensive
 
@@ -60,15 +69,14 @@ test_go_fmt:
 .PHONY: test_go_fmt
 TEST_GO += test_go_fmt
 
-test_go_megacheck:
-	@$(GOCC) get honnef.co/go/tools/cmd/megacheck
-	@for pkg in $(go-pkgs); do megacheck "$$pkg"; done
-.PHONY: megacheck
+test_go_lint: test/bin/golangci-lint
+	golangci-lint run ./...
+.PHONY: test_go_lint
 
 test_go: $(TEST_GO)
 
 check_go_version:
-	@go version
+	@$(GOCC) version
 	bin/check_go_version $(GO_MIN_VERSION)
 .PHONY: check_go_version
 DEPS_GO += check_go_version

@@ -3,9 +3,14 @@ package corehttp
 import (
 	"net"
 	"net/http"
+	"time"
 
 	core "github.com/ipfs/go-ipfs/core"
+	"go.opencensus.io/stats/view"
+	"go.opencensus.io/zpages"
 
+	ocprom "contrib.go.opencensus.io/exporter/prometheus"
+	quicmetrics "github.com/lucas-clemente/quic-go/metrics"
 	prometheus "github.com/prometheus/client_golang/prometheus"
 	promhttp "github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -18,12 +23,46 @@ func MetricsScrapingOption(path string) ServeOption {
 	}
 }
 
+// This adds collection of OpenCensus metrics
+func MetricsOpenCensusCollectionOption() ServeOption {
+	return func(_ *core.IpfsNode, _ net.Listener, mux *http.ServeMux) (*http.ServeMux, error) {
+		log.Info("Init OpenCensus")
+
+		promRegistry := prometheus.NewRegistry()
+		pe, err := ocprom.NewExporter(ocprom.Options{
+			Namespace: "ipfs_oc",
+			Registry:  promRegistry,
+			OnError: func(err error) {
+				log.Errorw("OC ERROR", "error", err)
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		// register prometheus with opencensus
+		view.RegisterExporter(pe)
+		view.SetReportingPeriod(2 * time.Second)
+
+		if err := view.Register(quicmetrics.DefaultViews...); err != nil {
+			return nil, err
+		}
+
+		// Construct the mux
+		zpages.Handle(mux, "/debug/metrics/oc/debugz")
+		mux.Handle("/debug/metrics/oc", pe)
+
+		return mux, nil
+	}
+}
+
 // This adds collection of net/http-related metrics
 func MetricsCollectionOption(handlerName string) ServeOption {
 	return func(_ *core.IpfsNode, _ net.Listener, mux *http.ServeMux) (*http.ServeMux, error) {
 		// Adapted from github.com/prometheus/client_golang/prometheus/http.go
 		// Work around https://github.com/prometheus/client_golang/pull/311
 		opts := prometheus.SummaryOpts{
+			Namespace:   "ipfs",
 			Subsystem:   "http",
 			ConstLabels: prometheus.Labels{"handler": handlerName},
 			Objectives:  map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
@@ -97,6 +136,13 @@ var (
 	peersTotalMetric = prometheus.NewDesc(
 		prometheus.BuildFQName("ipfs", "p2p", "peers_total"),
 		"Number of connected peers", []string{"transport"}, nil)
+
+	unixfsGetMetric = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace: "ipfs",
+		Subsystem: "http",
+		Name:      "unixfs_get_latency_seconds",
+		Help:      "The time till the first block is received when 'getting' a file from the gateway.",
+	}, []string{"namespace"})
 )
 
 type IpfsNodeCollector struct {
