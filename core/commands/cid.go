@@ -7,19 +7,16 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/ipfs/go-ipfs/core/commands/e"
-
-	cid "gx/ipfs/QmPSQnBKM9g7BaUcZCvswUJVscQ1ipjmwxN5PXCjkp9EQ7/go-cid"
-	mhash "gx/ipfs/QmPnFwZ2JXKnXgMw8CdBPxn7FWh6LLdjUjxV1fKHuJnkr8/go-multihash"
-	cidutil "gx/ipfs/QmQJSeE3CX4zos9qeaG8EhecEK9zvrTEfTG84J8C5NVRwt/go-cidutil"
-	cmds "gx/ipfs/QmRRovo1DE6i5cMjCbf19mQCSuszF6SKwdZNUMS7MtBnH1/go-ipfs-cmds"
-	verifcid "gx/ipfs/QmVkMRSkXrpjqrroEXWuYBvDBnXCdMMY6gsKicBGVGUqKT/go-verifcid"
-	cmdkit "gx/ipfs/Qmde5VP1qUkyQXKCfmEUA7bP64V2HAptbJ7phuPp7jXWwg/go-ipfs-cmdkit"
-	mbase "gx/ipfs/QmekxXDhCxCJRNuzmHreuaT3BsuJcsjcXWNrtV9C8DRHtd/go-multibase"
+	cid "github.com/ipfs/go-cid"
+	cidutil "github.com/ipfs/go-cidutil"
+	cmds "github.com/ipfs/go-ipfs-cmds"
+	verifcid "github.com/ipfs/go-verifcid"
+	mbase "github.com/multiformats/go-multibase"
+	mhash "github.com/multiformats/go-multihash"
 )
 
 var CidCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "Convert and discover properties of CIDs",
 	},
 	Subcommands: map[string]*cmds.Command{
@@ -29,16 +26,18 @@ var CidCmd = &cmds.Command{
 		"codecs": codecsCmd,
 		"hashes": hashesCmd,
 	},
+	Extra: CreateCmdExtras(SetDoesNotUseRepo(true)),
 }
 
 const (
 	cidFormatOptionName    = "f"
 	cidVerisonOptionName   = "v"
+	cidCodecOptionName     = "codec"
 	cidMultibaseOptionName = "b"
 )
 
 var cidFmtCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "Format and convert a CID in various useful ways.",
 		LongDescription: `
 Format and converts <cid>'s in various useful ways.
@@ -46,17 +45,19 @@ Format and converts <cid>'s in various useful ways.
 The optional format string is a printf style format string:
 ` + cidutil.FormatRef,
 	},
-	Arguments: []cmdkit.Argument{
-		cmdkit.StringArg("cid", true, true, "Cids to format.").EnableStdin(),
+	Arguments: []cmds.Argument{
+		cmds.StringArg("cid", true, true, "Cids to format.").EnableStdin(),
 	},
-	Options: []cmdkit.Option{
-		cmdkit.StringOption(cidFormatOptionName, "Printf style format string.").WithDefault("%s"),
-		cmdkit.StringOption(cidVerisonOptionName, "CID version to convert to."),
-		cmdkit.StringOption(cidMultibaseOptionName, "Multibase to display CID in."),
+	Options: []cmds.Option{
+		cmds.StringOption(cidFormatOptionName, "Printf style format string.").WithDefault("%s"),
+		cmds.StringOption(cidVerisonOptionName, "CID version to convert to."),
+		cmds.StringOption(cidCodecOptionName, "CID codec to convert to."),
+		cmds.StringOption(cidMultibaseOptionName, "Multibase to display CID in."),
 	},
 	Run: func(req *cmds.Request, resp cmds.ResponseEmitter, env cmds.Environment) error {
 		fmtStr, _ := req.Options[cidFormatOptionName].(string)
 		verStr, _ := req.Options[cidVerisonOptionName].(string)
+		codecStr, _ := req.Options[cidCodecOptionName].(string)
 		baseStr, _ := req.Options[cidMultibaseOptionName].(string)
 
 		opts := cidFormatOpts{}
@@ -66,10 +67,21 @@ The optional format string is a printf style format string:
 		}
 		opts.fmtStr = fmtStr
 
+		if codecStr != "" {
+			codec, ok := cid.Codecs[codecStr]
+			if !ok {
+				return fmt.Errorf("unknown IPLD codec: %s", codecStr)
+			}
+			opts.newCodec = codec
+		} // otherwise, leave it as 0 (not a valid IPLD codec)
+
 		switch verStr {
 		case "":
 			// noop
 		case "0":
+			if opts.newCodec != 0 && opts.newCodec != cid.DagProtobuf {
+				return fmt.Errorf("cannot convert to CIDv0 with any codec other than DagPB")
+			}
 			opts.verConv = toCidV0
 		case "1":
 			opts.verConv = toCidV1
@@ -104,16 +116,16 @@ The optional format string is a printf style format string:
 
 type CidFormatRes struct {
 	CidStr    string // Original Cid String passed in
-	Formatted string // Formated Result
+	Formatted string // Formatted Result
 	ErrorMsg  string // Error
 }
 
 var base32Cmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "Convert CIDs to Base32 CID version 1.",
 	},
-	Arguments: []cmdkit.Argument{
-		cmdkit.StringArg("cid", true, true, "Cids to convert.").EnableStdin(),
+	Arguments: []cmds.Argument{
+		cmds.StringArg("cid", true, true, "Cids to convert.").EnableStdin(),
 	},
 	Run: func(req *cmds.Request, resp cmds.ResponseEmitter, env cmds.Environment) error {
 		opts := cidFormatOpts{
@@ -128,9 +140,10 @@ var base32Cmd = &cmds.Command{
 }
 
 type cidFormatOpts struct {
-	fmtStr  string
-	newBase mbase.Encoding
-	verConv func(cid cid.Cid) (cid.Cid, error)
+	fmtStr   string
+	newBase  mbase.Encoding
+	verConv  func(cid cid.Cid) (cid.Cid, error)
+	newCodec uint64
 }
 
 type argumentIterator struct {
@@ -172,10 +185,11 @@ func emitCids(req *cmds.Request, resp cmds.ResponseEmitter, opts cidFormatOpts) 
 			emitErr = resp.Emit(res)
 			continue
 		}
-		base := opts.newBase
-		if base == -1 {
-			base, _ = cid.ExtractEncoding(cidStr)
+
+		if opts.newCodec != 0 && opts.newCodec != c.Type() {
+			c = cid.NewCidV1(opts.newCodec, c.Hash())
 		}
+
 		if opts.verConv != nil {
 			c, err = opts.verConv(c)
 			if err != nil {
@@ -184,6 +198,16 @@ func emitCids(req *cmds.Request, resp cmds.ResponseEmitter, opts cidFormatOpts) 
 				continue
 			}
 		}
+
+		base := opts.newBase
+		if base == -1 {
+			if c.Version() == 0 {
+				base = mbase.Base58BTC
+			} else {
+				base, _ = cid.ExtractEncoding(cidStr)
+			}
+		}
+
 		str, err := cidutil.Format(opts.fmtStr, base, c)
 		if _, ok := err.(cidutil.FormatStringError); ok {
 			// no point in continuing if there is a problem with the format string
@@ -228,12 +252,12 @@ const (
 )
 
 var basesCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "List available multibase encodings.",
 	},
-	Options: []cmdkit.Option{
-		cmdkit.BoolOption(prefixOptionName, "also include the single leter prefixes in addition to the code"),
-		cmdkit.BoolOption(numericOptionName, "also include numeric codes"),
+	Options: []cmds.Option{
+		cmds.BoolOption(prefixOptionName, "also include the single letter prefixes in addition to the code"),
+		cmds.BoolOption(numericOptionName, "also include numeric codes"),
 	},
 	Run: func(req *cmds.Request, resp cmds.ResponseEmitter, env cmds.Environment) error {
 		var res []CodeAndName
@@ -241,17 +265,12 @@ var basesCmd = &cmds.Command{
 		for code, name := range mbase.EncodingToStr {
 			res = append(res, CodeAndName{int(code), name})
 		}
-		cmds.EmitOnce(resp, res)
-		return nil
+		return cmds.EmitOnce(resp, res)
 	},
 	Encoders: cmds.EncoderMap{
-		cmds.Text: cmds.MakeEncoder(func(req *cmds.Request, w io.Writer, val0 interface{}) error {
+		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, val []CodeAndName) error {
 			prefixes, _ := req.Options[prefixOptionName].(bool)
 			numeric, _ := req.Options[numericOptionName].(bool)
-			val, ok := val0.([]CodeAndName)
-			if !ok {
-				return e.TypeErr(val, val0)
-			}
 			sort.Sort(multibaseSorter{val})
 			for _, v := range val {
 				code := v.Code
@@ -281,11 +300,11 @@ const (
 )
 
 var codecsCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "List available CID codecs.",
 	},
-	Options: []cmdkit.Option{
-		cmdkit.BoolOption(codecsNumericOptionName, "also include numeric codes"),
+	Options: []cmds.Option{
+		cmds.BoolOption(codecsNumericOptionName, "also include numeric codes"),
 	},
 	Run: func(req *cmds.Request, resp cmds.ResponseEmitter, env cmds.Environment) error {
 		var res []CodeAndName
@@ -293,16 +312,11 @@ var codecsCmd = &cmds.Command{
 		for code, name := range cid.CodecToStr {
 			res = append(res, CodeAndName{int(code), name})
 		}
-		cmds.EmitOnce(resp, res)
-		return nil
+		return cmds.EmitOnce(resp, res)
 	},
 	Encoders: cmds.EncoderMap{
-		cmds.Text: cmds.MakeEncoder(func(req *cmds.Request, w io.Writer, val0 interface{}) error {
+		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, val []CodeAndName) error {
 			numeric, _ := req.Options[codecsNumericOptionName].(bool)
-			val, ok := val0.([]CodeAndName)
-			if !ok {
-				return e.TypeErr(val, val0)
-			}
 			sort.Sort(codeAndNameSorter{val})
 			for _, v := range val {
 				if numeric {
@@ -318,7 +332,7 @@ var codecsCmd = &cmds.Command{
 }
 
 var hashesCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline: "List available multihashes.",
 	},
 	Options: codecsCmd.Options,
@@ -331,8 +345,7 @@ var hashesCmd = &cmds.Command{
 			}
 			res = append(res, CodeAndName{int(code), name})
 		}
-		cmds.EmitOnce(resp, res)
-		return nil
+		return cmds.EmitOnce(resp, res)
 	},
 	Encoders: codecsCmd.Encoders,
 	Type:     codecsCmd.Type,

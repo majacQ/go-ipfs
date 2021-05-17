@@ -9,10 +9,10 @@ import (
 	"github.com/ipfs/go-ipfs/core/coredag"
 	"github.com/ipfs/go-ipfs/plugin"
 
-	"gx/ipfs/QmPSQnBKM9g7BaUcZCvswUJVscQ1ipjmwxN5PXCjkp9EQ7/go-cid"
-	mh "gx/ipfs/QmPnFwZ2JXKnXgMw8CdBPxn7FWh6LLdjUjxV1fKHuJnkr8/go-multihash"
-	git "gx/ipfs/QmRNxeMQs2eVPouLxwa4tN72yTLLgWAi1cChXqgdEz5Ko4/go-ipld-git"
-	"gx/ipfs/QmdDXJs4axxefSPgK6Y1QhpJWKuDPnGJiqgq4uncb4rFHL/go-ipld-format"
+	"github.com/ipfs/go-cid"
+	"github.com/ipfs/go-ipld-format"
+	git "github.com/ipfs/go-ipld-git"
+	mh "github.com/multiformats/go-multihash"
 )
 
 // Plugins is exported list of plugins that will be loaded
@@ -32,7 +32,7 @@ func (*gitPlugin) Version() string {
 	return "0.0.1"
 }
 
-func (*gitPlugin) Init() error {
+func (*gitPlugin) Init(_ *plugin.Environment) error {
 	return nil
 }
 

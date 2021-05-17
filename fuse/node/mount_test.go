@@ -1,22 +1,23 @@
-// +build !nofuse
+// +build !openbsd,!nofuse,!netbsd,!plan9
 
 package node
 
 import (
 	"io/ioutil"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"bazil.org/fuse"
 
 	"context"
 
 	core "github.com/ipfs/go-ipfs/core"
 	ipns "github.com/ipfs/go-ipfs/fuse/ipns"
 	mount "github.com/ipfs/go-ipfs/fuse/mount"
-	namesys "github.com/ipfs/go-ipfs/namesys"
 
-	ci "gx/ipfs/Qma6ESRQTf1ZLPgzpCwDTqQJefPnU6uLvMjP18vK8EWp8L/go-testutil/ci"
-	offroute "gx/ipfs/QmcjvUP25nLSwELgUeqWe854S3XVbtsntTr7kZxG63yKhe/go-ipfs-routing/offline"
+	ci "github.com/libp2p/go-libp2p-testing/ci"
 )
 
 func maybeSkipFuseTests(t *testing.T) {
@@ -41,18 +42,10 @@ func TestExternalUnmount(t *testing.T) {
 	// TODO: needed?
 	maybeSkipFuseTests(t)
 
-	node, err := core.NewNode(context.Background(), nil)
+	node, err := core.NewNode(context.Background(), &core.BuildCfg{})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	err = node.LoadPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	node.Routing = offroute.NewOfflineRouter(node.Repo.Datastore(), node.RecordValidator)
-	node.Namesys = namesys.NewNameSystem(node.Routing, node.Repo.Datastore(), 0)
 
 	err = ipns.InitializeKeyspace(node, node.PrivateKey)
 	if err != nil {
@@ -72,7 +65,13 @@ func TestExternalUnmount(t *testing.T) {
 
 	err = Mount(node, ipfsDir, ipnsDir)
 	if err != nil {
-		t.Fatal(err)
+		if strings.Contains(err.Error(), "unable to check fuse version") || err == fuse.ErrOSXFUSENotFound {
+			t.Skip(err)
+		}
+	}
+
+	if err != nil {
+		t.Fatalf("error mounting: %v", err)
 	}
 
 	// Run shell command to externally unmount the directory

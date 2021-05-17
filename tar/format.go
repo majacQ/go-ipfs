@@ -8,15 +8,15 @@ import (
 	"io"
 	"strings"
 
-	"github.com/ipfs/go-ipfs/dagutils"
-	path "gx/ipfs/QmRKuTyCzg7HFBcV1YUhzStroGtJSb8iWgyxfsDCwFhWTS/go-path"
-	importer "gx/ipfs/QmTJUySFxXjh54zEoFbzQEmGD3yj89XKS3A28y7Nqsn1TC/go-unixfs/importer"
-	uio "gx/ipfs/QmTJUySFxXjh54zEoFbzQEmGD3yj89XKS3A28y7Nqsn1TC/go-unixfs/io"
-	dag "gx/ipfs/QmY8BMUSpCwNiTmFhACmC9Bt1qT63cHP35AoQAus4x14qH/go-merkledag"
+	dag "github.com/ipfs/go-merkledag"
+	"github.com/ipfs/go-merkledag/dagutils"
+	path "github.com/ipfs/go-path"
+	importer "github.com/ipfs/go-unixfs/importer"
+	uio "github.com/ipfs/go-unixfs/io"
 
-	chunker "gx/ipfs/QmTUTG9Jg9ZRA1EzTPGTDvnwfcfKhDMnqANnP9fe4rSjMR/go-ipfs-chunker"
-	logging "gx/ipfs/QmZChCsSt8DctjceaL56Eibc29CVQq4dGKRXC5JRZ6Ppae/go-log"
-	ipld "gx/ipfs/QmdDXJs4axxefSPgK6Y1QhpJWKuDPnGJiqgq4uncb4rFHL/go-ipld-format"
+	chunker "github.com/ipfs/go-ipfs-chunker"
+	ipld "github.com/ipfs/go-ipld-format"
+	logging "github.com/ipfs/go-log"
 )
 
 var log = logging.Logger("tarfmt")
