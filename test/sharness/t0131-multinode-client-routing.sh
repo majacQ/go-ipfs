@@ -43,12 +43,12 @@ run_single_file_test() {
 NNODES=10
 
 test_expect_success "set up testbed" '
-  iptb init -n $NNODES -p 0 -f --bootstrap=none
+  iptb testbed create -type localipfs -count $NNODES -force -init
 '
 
 test_expect_success "start up nodes" '
-  iptb start [0-7] &&
-  iptb start [8-9] --args="--routing=dhtclient"
+  iptb start -wait [0-7] &&
+  iptb start -wait [8-9] -- --routing=dhtclient
 '
 
 test_expect_success "connect up nodes" '
@@ -60,7 +60,7 @@ test_expect_success "add a file on a node in client mode" '
   FILE_HASH=$(ipfsi 8 add -q filea)
 '
 
-test_expect_success "retrieve that file on a client mode node" '
+test_expect_success "retrieve that file on a node in client mode" '
   check_file_fetch 9 $FILE_HASH filea
 '
 

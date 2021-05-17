@@ -3,18 +3,19 @@ package namesys
 import (
 	"context"
 	"crypto/rand"
+	"github.com/ipfs/go-path"
 	"testing"
 	"time"
 
-	testutil "gx/ipfs/QmNfQbgBfARAtrYsBguChX6VJ5nbjeoYy1KdC36aaYWqG8/go-testutil"
-	ci "gx/ipfs/QmPvyPwuCgJ7pDmrKDxRtsScJgBaM5h4EpRL2qQJsmXf4n/go-libp2p-crypto"
-	mockrouting "gx/ipfs/QmQ9PR61a8rwEFuFNs7JMA1QtQC9yZnBwoDn51JWXDbaTd/go-ipfs-routing/mock"
-	dshelp "gx/ipfs/QmS73grfbWgWrNztd8Lns9GCG3jjRNDfcPYg2VYQzKDZSt/go-ipfs-ds-help"
-	ipns "gx/ipfs/QmX72XT6sSQRkNHKcAFLM2VqB3B4bWPetgWnHY8LgsUVeT/go-ipns"
-	ma "gx/ipfs/QmYmsdtJ3HsodkePE3eU3TsCaP2YvPZJ4LoXnNkDE5Tpt7/go-multiaddr"
-	ds "gx/ipfs/QmaRb5yNXKonhbkpNxNawoydk4N6es6b4fPj19sjEKsh5D/go-datastore"
-	dssync "gx/ipfs/QmaRb5yNXKonhbkpNxNawoydk4N6es6b4fPj19sjEKsh5D/go-datastore/sync"
-	peer "gx/ipfs/QmbNepETomvmXfz1X5pHNFD2QuPqnqi47dTd94QJWSorQ3/go-libp2p-peer"
+	ds "github.com/ipfs/go-datastore"
+	dssync "github.com/ipfs/go-datastore/sync"
+	dshelp "github.com/ipfs/go-ipfs-ds-help"
+	mockrouting "github.com/ipfs/go-ipfs-routing/mock"
+	ipns "github.com/ipfs/go-ipns"
+	ci "github.com/libp2p/go-libp2p-core/crypto"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	testutil "github.com/libp2p/go-libp2p-testing/net"
+	ma "github.com/multiformats/go-multiaddr"
 )
 
 type identity struct {
@@ -109,4 +110,46 @@ func TestRSAPublisher(t *testing.T) {
 
 func TestEd22519Publisher(t *testing.T) {
 	testNamekeyPublisher(t, ci.Ed25519, ds.ErrNotFound, false)
+}
+
+func TestAsyncDS(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt := mockrouting.NewServer().Client(testutil.RandIdentityOrFatal(t))
+	ds := &checkSyncDS{
+		Datastore: ds.NewMapDatastore(),
+		syncKeys:  make(map[ds.Key]struct{}),
+	}
+	publisher := NewIpnsPublisher(rt, ds)
+
+	ipnsFakeID := testutil.RandIdentityOrFatal(t)
+	ipnsVal, err := path.ParsePath("/ipns/foo.bar")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := publisher.Publish(ctx, ipnsFakeID.PrivateKey(), ipnsVal); err != nil {
+		t.Fatal(err)
+	}
+
+	ipnsKey := IpnsDsKey(ipnsFakeID.ID())
+
+	for k := range ds.syncKeys {
+		if k.IsAncestorOf(ipnsKey) || k.Equal(ipnsKey) {
+			return
+		}
+	}
+
+	t.Fatal("ipns key not synced")
+}
+
+type checkSyncDS struct {
+	ds.Datastore
+	syncKeys map[ds.Key]struct{}
+}
+
+func (d *checkSyncDS) Sync(prefix ds.Key) error {
+	d.syncKeys[prefix] = struct{}{}
+	return d.Datastore.Sync(prefix)
 }

@@ -5,19 +5,17 @@ import (
 	"strings"
 	"time"
 
-	path "gx/ipfs/QmdrpbDgeYH3VxkCciQCJY5LkDYdXtig6unDzQmMxFtWEw/go-path"
-
-	opts "github.com/ipfs/go-ipfs/namesys/opts"
-
-	cid "gx/ipfs/QmPSQnBKM9g7BaUcZCvswUJVscQ1ipjmwxN5PXCjkp9EQ7/go-cid"
-	routing "gx/ipfs/QmPmFeQ5oY5G6M7aBWggi5phxEPXwsQntE1DFcUzETULdp/go-libp2p-routing"
-	mh "gx/ipfs/QmPnFwZ2JXKnXgMw8CdBPxn7FWh6LLdjUjxV1fKHuJnkr8/go-multihash"
-	dht "gx/ipfs/QmSteomMgXnSQxLEY5UpxmkYAd8QF9JuLLeLYBokTHxFru/go-libp2p-kad-dht"
-	ipns "gx/ipfs/QmX72XT6sSQRkNHKcAFLM2VqB3B4bWPetgWnHY8LgsUVeT/go-ipns"
-	pb "gx/ipfs/QmX72XT6sSQRkNHKcAFLM2VqB3B4bWPetgWnHY8LgsUVeT/go-ipns/pb"
-	logging "gx/ipfs/QmZChCsSt8DctjceaL56Eibc29CVQq4dGKRXC5JRZ6Ppae/go-log"
-	peer "gx/ipfs/QmbNepETomvmXfz1X5pHNFD2QuPqnqi47dTd94QJWSorQ3/go-libp2p-peer"
-	proto "gx/ipfs/QmdxUuburamoF6zF9qjeQC4WYcWGbWuRmdLacMEsW8ioD8/gogo-protobuf/proto"
+	proto "github.com/gogo/protobuf/proto"
+	cid "github.com/ipfs/go-cid"
+	ipns "github.com/ipfs/go-ipns"
+	pb "github.com/ipfs/go-ipns/pb"
+	logging "github.com/ipfs/go-log"
+	path "github.com/ipfs/go-path"
+	opts "github.com/ipfs/interface-go-ipfs-core/options/namesys"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	routing "github.com/libp2p/go-libp2p-core/routing"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
+	mh "github.com/multiformats/go-multihash"
 )
 
 var log = logging.Logger("namesys")
@@ -61,23 +59,10 @@ func (r *IpnsResolver) resolveOnceAsync(ctx context.Context, name string, option
 	}
 
 	name = strings.TrimPrefix(name, "/ipns/")
-	pid, err := peer.IDB58Decode(name)
+
+	pid, err := peer.Decode(name)
 	if err != nil {
 		log.Debugf("RoutingResolver: could not convert public key hash %s to peer ID: %s\n", name, err)
-		out <- onceResult{err: err}
-		close(out)
-		cancel()
-		return out
-	}
-
-	// Name should be the hash of a public key retrievable from ipfs.
-	// We retrieve the public key here to make certain that it's in the peer
-	// store before calling GetValue() on the DHT - the DHT will call the
-	// ipns validator, which in turn will get the public key from the peer
-	// store to verify the record signature
-	_, err = routing.GetPublicKey(r.routing, ctx, pid)
-	if err != nil {
-		log.Debugf("RoutingResolver: could not retrieve public key %s: %s\n", name, err)
 		out <- onceResult{err: err}
 		close(out)
 		cancel()
@@ -139,7 +124,7 @@ func (r *IpnsResolver) resolveOnceAsync(ctx context.Context, name string, option
 				case ipns.ErrUnrecognizedValidity:
 					// No EOL.
 				case nil:
-					ttEol := eol.Sub(time.Now())
+					ttEol := time.Until(eol)
 					if ttEol < 0 {
 						// It *was* valid when we first resolved it.
 						ttl = 0

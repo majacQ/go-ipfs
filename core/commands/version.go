@@ -1,17 +1,16 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"runtime"
-	"strings"
+	"runtime/debug"
 
 	version "github.com/ipfs/go-ipfs"
-	cmds "github.com/ipfs/go-ipfs/commands"
-	e "github.com/ipfs/go-ipfs/core/commands/e"
 	fsrepo "github.com/ipfs/go-ipfs/repo/fsrepo"
 
-	"gx/ipfs/Qmde5VP1qUkyQXKCfmEUA7bP64V2HAptbJ7phuPp7jXWwg/go-ipfs-cmdkit"
+	cmds "github.com/ipfs/go-ipfs-cmds"
 )
 
 type VersionOutput struct {
@@ -30,19 +29,24 @@ const (
 )
 
 var VersionCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline:          "Show ipfs version information.",
 		ShortDescription: "Returns the current version of ipfs and exits.",
 	},
-
-	Options: []cmdkit.Option{
-		cmdkit.BoolOption(versionNumberOptionName, "n", "Only show the version number."),
-		cmdkit.BoolOption(versionCommitOptionName, "Show the commit hash."),
-		cmdkit.BoolOption(versionRepoOptionName, "Show repo version."),
-		cmdkit.BoolOption(versionAllOptionName, "Show all version information"),
+	Subcommands: map[string]*cmds.Command{
+		"deps": depsVersionCommand,
 	},
-	Run: func(req cmds.Request, res cmds.Response) {
-		res.SetOutput(&VersionOutput{
+
+	Options: []cmds.Option{
+		cmds.BoolOption(versionNumberOptionName, "n", "Only show the version number."),
+		cmds.BoolOption(versionCommitOptionName, "Show the commit hash."),
+		cmds.BoolOption(versionRepoOptionName, "Show repo version."),
+		cmds.BoolOption(versionAllOptionName, "Show all version information"),
+	},
+	// must be permitted to run before init
+	Extra: CreateCmdExtras(SetDoesNotUseRepo(true), SetDoesNotUseConfigAsInput(true)),
+	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
+		return cmds.EmitOnce(res, &VersionOutput{
 			Version: version.CurrentVersionNumber,
 			Commit:  version.CurrentCommit,
 			Repo:    fmt.Sprint(fsrepo.RepoVersion),
@@ -50,57 +54,95 @@ var VersionCmd = &cmds.Command{
 			Golang:  runtime.Version(),
 		})
 	},
-	Marshalers: cmds.MarshalerMap{
-		cmds.Text: func(res cmds.Response) (io.Reader, error) {
-			v, err := unwrapOutput(res.Output())
-			if err != nil {
-				return nil, err
+	Encoders: cmds.EncoderMap{
+		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, version *VersionOutput) error {
+			all, _ := req.Options[versionAllOptionName].(bool)
+			if all {
+				ver := version.Version
+				if version.Commit != "" {
+					ver += "-" + version.Commit
+				}
+				out := fmt.Sprintf("go-ipfs version: %s\n"+
+					"Repo version: %s\nSystem version: %s\nGolang version: %s\n",
+					ver, version.Repo, version.System, version.Golang)
+				fmt.Fprint(w, out)
+				return nil
 			}
 
-			version, ok := v.(*VersionOutput)
-			if !ok {
-				return nil, e.TypeErr(version, v)
-			}
-
-			repo, _, err := res.Request().Option(versionRepoOptionName).Bool()
-			if err != nil {
-				return nil, err
-			}
-
-			if repo {
-				return strings.NewReader(version.Repo + "\n"), nil
-			}
-
-			commit, _, err := res.Request().Option(versionCommitOptionName).Bool()
+			commit, _ := req.Options[versionCommitOptionName].(bool)
 			commitTxt := ""
-			if err != nil {
-				return nil, err
-			}
-			if commit {
+			if commit && version.Commit != "" {
 				commitTxt = "-" + version.Commit
 			}
 
-			number, _, err := res.Request().Option(versionNumberOptionName).Bool()
-			if err != nil {
-				return nil, err
+			repo, _ := req.Options[versionRepoOptionName].(bool)
+			if repo {
+				fmt.Fprintln(w, version.Repo)
+				return nil
 			}
+
+			number, _ := req.Options[versionNumberOptionName].(bool)
 			if number {
-				return strings.NewReader(fmt.Sprintln(version.Version + commitTxt)), nil
+				fmt.Fprintln(w, version.Version+commitTxt)
+				return nil
 			}
 
-			all, _, err := res.Request().Option(versionAllOptionName).Bool()
-			if err != nil {
-				return nil, err
-			}
-			if all {
-				out := fmt.Sprintf("go-ipfs version: %s-%s\n"+
-					"Repo version: %s\nSystem version: %s\nGolang version: %s\n",
-					version.Version, version.Commit, version.Repo, version.System, version.Golang)
-				return strings.NewReader(out), nil
-			}
-
-			return strings.NewReader(fmt.Sprintf("ipfs version %s%s\n", version.Version, commitTxt)), nil
-		},
+			fmt.Fprint(w, fmt.Sprintf("ipfs version %s%s\n", version.Version, commitTxt))
+			return nil
+		}),
 	},
 	Type: VersionOutput{},
+}
+
+type Dependency struct {
+	Path       string
+	Version    string
+	ReplacedBy string
+	Sum        string
+}
+
+const pkgVersionFmt = "%s@%s"
+
+var depsVersionCommand = &cmds.Command{
+	Helptext: cmds.HelpText{
+		Tagline: "Shows information about dependencies used for build",
+		ShortDescription: `
+Print out all dependencies and their versions.`,
+	},
+	Type: Dependency{},
+
+	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
+		info, ok := debug.ReadBuildInfo()
+		if !ok {
+			return errors.New("no embedded dependency information")
+		}
+		toDependency := func(mod *debug.Module) (dep Dependency) {
+			dep.Path = mod.Path
+			dep.Version = mod.Version
+			dep.Sum = mod.Sum
+			if repl := mod.Replace; repl != nil {
+				dep.ReplacedBy = fmt.Sprintf(pkgVersionFmt, repl.Path, repl.Version)
+			}
+			return
+		}
+		if err := res.Emit(toDependency(&info.Main)); err != nil {
+			return err
+		}
+		for _, dep := range info.Deps {
+			if err := res.Emit(toDependency(dep)); err != nil {
+				return err
+			}
+		}
+		return nil
+	},
+	Encoders: cmds.EncoderMap{
+		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, dep Dependency) error {
+			fmt.Fprintf(w, pkgVersionFmt, dep.Path, dep.Version)
+			if dep.ReplacedBy != "" {
+				fmt.Fprintf(w, " => %s", dep.ReplacedBy)
+			}
+			fmt.Fprintf(w, "\n")
+			return nil
+		}),
+	},
 }

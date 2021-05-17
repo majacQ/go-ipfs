@@ -6,14 +6,13 @@ import (
 	"testing"
 	"time"
 
-	path "gx/ipfs/QmdrpbDgeYH3VxkCciQCJY5LkDYdXtig6unDzQmMxFtWEw/go-path"
-
-	testutil "gx/ipfs/QmNfQbgBfARAtrYsBguChX6VJ5nbjeoYy1KdC36aaYWqG8/go-testutil"
-	mockrouting "gx/ipfs/QmQ9PR61a8rwEFuFNs7JMA1QtQC9yZnBwoDn51JWXDbaTd/go-ipfs-routing/mock"
-	ipns "gx/ipfs/QmX72XT6sSQRkNHKcAFLM2VqB3B4bWPetgWnHY8LgsUVeT/go-ipns"
-	ds "gx/ipfs/QmaRb5yNXKonhbkpNxNawoydk4N6es6b4fPj19sjEKsh5D/go-datastore"
-	dssync "gx/ipfs/QmaRb5yNXKonhbkpNxNawoydk4N6es6b4fPj19sjEKsh5D/go-datastore/sync"
-	peer "gx/ipfs/QmbNepETomvmXfz1X5pHNFD2QuPqnqi47dTd94QJWSorQ3/go-libp2p-peer"
+	ds "github.com/ipfs/go-datastore"
+	dssync "github.com/ipfs/go-datastore/sync"
+	mockrouting "github.com/ipfs/go-ipfs-routing/mock"
+	ipns "github.com/ipfs/go-ipns"
+	path "github.com/ipfs/go-path"
+	testutil "github.com/libp2p/go-libp2p-testing/net"
+	tnet "github.com/libp2p/go-libp2p-testing/net"
 )
 
 func TestRoutingResolve(t *testing.T) {
@@ -25,23 +24,15 @@ func TestRoutingResolve(t *testing.T) {
 	resolver := NewIpnsResolver(d)
 	publisher := NewIpnsPublisher(d, dstore)
 
-	privk, pubk, err := testutil.RandTestKeyPair(512)
-	if err != nil {
-		t.Fatal(err)
-	}
+	identity := tnet.RandIdentityOrFatal(t)
 
 	h := path.FromString("/ipfs/QmZULkCELmmk5XNfCgTnCyFgAVxBRBXyDHGGMVoLFLiXEN")
-	err = publisher.Publish(context.Background(), privk, h)
+	err := publisher.Publish(context.Background(), identity.PrivateKey(), h)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	pid, err := peer.IDFromPublicKey(pubk)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res, err := resolver.Resolve(context.Background(), pid.Pretty())
+	res, err := resolver.Resolve(context.Background(), identity.ID().Pretty())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,36 +49,28 @@ func TestPrexistingExpiredRecord(t *testing.T) {
 	resolver := NewIpnsResolver(d)
 	publisher := NewIpnsPublisher(d, dstore)
 
-	privk, pubk, err := testutil.RandTestKeyPair(512)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	id, err := peer.IDFromPublicKey(pubk)
-	if err != nil {
-		t.Fatal(err)
-	}
+	identity := tnet.RandIdentityOrFatal(t)
 
 	// Make an expired record and put it in the datastore
 	h := path.FromString("/ipfs/QmZULkCELmmk5XNfCgTnCyFgAVxBRBXyDHGGMVoLFLiXEN")
 	eol := time.Now().Add(time.Hour * -1)
 
-	entry, err := ipns.Create(privk, []byte(h), 0, eol)
+	entry, err := ipns.Create(identity.PrivateKey(), []byte(h), 0, eol)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = PutRecordToRouting(context.Background(), d, pubk, entry)
+	err = PutRecordToRouting(context.Background(), d, identity.PublicKey(), entry)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Now, with an old record in the system already, try and publish a new one
-	err = publisher.Publish(context.Background(), privk, h)
+	err = publisher.Publish(context.Background(), identity.PrivateKey(), h)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = verifyCanResolve(resolver, id.Pretty(), h)
+	err = verifyCanResolve(resolver, identity.ID().Pretty(), h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,35 +83,27 @@ func TestPrexistingRecord(t *testing.T) {
 	resolver := NewIpnsResolver(d)
 	publisher := NewIpnsPublisher(d, dstore)
 
-	privk, pubk, err := testutil.RandTestKeyPair(512)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	id, err := peer.IDFromPublicKey(pubk)
-	if err != nil {
-		t.Fatal(err)
-	}
+	identity := tnet.RandIdentityOrFatal(t)
 
 	// Make a good record and put it in the datastore
 	h := path.FromString("/ipfs/QmZULkCELmmk5XNfCgTnCyFgAVxBRBXyDHGGMVoLFLiXEN")
 	eol := time.Now().Add(time.Hour)
-	entry, err := ipns.Create(privk, []byte(h), 0, eol)
+	entry, err := ipns.Create(identity.PrivateKey(), []byte(h), 0, eol)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = PutRecordToRouting(context.Background(), d, pubk, entry)
+	err = PutRecordToRouting(context.Background(), d, identity.PublicKey(), entry)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Now, with an old record in the system already, try and publish a new one
-	err = publisher.Publish(context.Background(), privk, h)
+	err = publisher.Publish(context.Background(), identity.PrivateKey(), h)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = verifyCanResolve(resolver, id.Pretty(), h)
+	err = verifyCanResolve(resolver, identity.ID().Pretty(), h)
 	if err != nil {
 		t.Fatal(err)
 	}

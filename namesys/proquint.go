@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 
-	proquint "gx/ipfs/QmYnf27kzqR2cxt6LFZdrAFJuQd6785fTkBvMuEj9EeRxM/proquint"
-	path "gx/ipfs/QmdrpbDgeYH3VxkCciQCJY5LkDYdXtig6unDzQmMxFtWEw/go-path"
-
-	opts "github.com/ipfs/go-ipfs/namesys/opts"
+	proquint "github.com/bren2010/proquint"
+	path "github.com/ipfs/go-path"
+	opts "github.com/ipfs/interface-go-ipfs-core/options/namesys"
 )
 
 type ProquintResolver struct{}

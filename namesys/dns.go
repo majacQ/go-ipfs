@@ -3,14 +3,17 @@ package namesys
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 
-	opts "github.com/ipfs/go-ipfs/namesys/opts"
-
-	isd "gx/ipfs/QmZmmuAXgX73UQmX1jRKjTGmjzq24Jinqkq8vzkBtno4uX/go-is-domain"
-	path "gx/ipfs/QmdrpbDgeYH3VxkCciQCJY5LkDYdXtig6unDzQmMxFtWEw/go-path"
+	path "github.com/ipfs/go-path"
+	opts "github.com/ipfs/interface-go-ipfs-core/options/namesys"
+	isd "github.com/jbenet/go-is-domain"
 )
+
+const ethTLD = "eth"
+const linkTLD = "link"
 
 type LookupTXTFunc func(name string) (txt []string, err error)
 
@@ -45,22 +48,35 @@ type lookupRes struct {
 // TXT records for a given domain name should contain a b58
 // encoded multihash.
 func (r *DNSResolver) resolveOnceAsync(ctx context.Context, name string, options opts.ResolveOpts) <-chan onceResult {
+	var fqdn string
 	out := make(chan onceResult, 1)
 	segments := strings.SplitN(name, "/", 2)
 	domain := segments[0]
 
 	if !isd.IsDomain(domain) {
-		out <- onceResult{err: errors.New("not a valid domain name")}
+		out <- onceResult{err: fmt.Errorf("not a valid domain name: %s", domain)}
 		close(out)
 		return out
 	}
 	log.Debugf("DNSResolver resolving %s", domain)
 
+	if strings.HasSuffix(domain, ".") {
+		fqdn = domain
+	} else {
+		fqdn = domain + "."
+	}
+
+	if strings.HasSuffix(fqdn, "."+ethTLD+".") {
+		// This is an ENS name.  As we're resolving via an arbitrary DNS server
+		// that may not know about .eth we need to add our link domain suffix.
+		fqdn += linkTLD + "."
+	}
+
 	rootChan := make(chan lookupRes, 1)
-	go workDomain(r, domain, rootChan)
+	go workDomain(r, fqdn, rootChan)
 
 	subChan := make(chan lookupRes, 1)
-	go workDomain(r, "_dnslink."+domain, subChan)
+	go workDomain(r, "_dnslink."+fqdn, subChan)
 
 	appendPath := func(p path.Path) (path.Path, error) {
 		if len(segments) > 1 {

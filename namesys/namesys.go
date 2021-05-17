@@ -2,20 +2,20 @@ package namesys
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 
-	path "gx/ipfs/QmdrpbDgeYH3VxkCciQCJY5LkDYdXtig6unDzQmMxFtWEw/go-path"
-
-	opts "github.com/ipfs/go-ipfs/namesys/opts"
-
-	routing "gx/ipfs/QmPmFeQ5oY5G6M7aBWggi5phxEPXwsQntE1DFcUzETULdp/go-libp2p-routing"
-	mh "gx/ipfs/QmPnFwZ2JXKnXgMw8CdBPxn7FWh6LLdjUjxV1fKHuJnkr8/go-multihash"
-	ci "gx/ipfs/QmPvyPwuCgJ7pDmrKDxRtsScJgBaM5h4EpRL2qQJsmXf4n/go-libp2p-crypto"
-	lru "gx/ipfs/QmQjMHF8ptRgx4E57UFMiT4YM6kqaJeYxZ1MCDX23aw4rK/golang-lru"
-	isd "gx/ipfs/QmZmmuAXgX73UQmX1jRKjTGmjzq24Jinqkq8vzkBtno4uX/go-is-domain"
-	ds "gx/ipfs/QmaRb5yNXKonhbkpNxNawoydk4N6es6b4fPj19sjEKsh5D/go-datastore"
-	peer "gx/ipfs/QmbNepETomvmXfz1X5pHNFD2QuPqnqi47dTd94QJWSorQ3/go-libp2p-peer"
+	lru "github.com/hashicorp/golang-lru"
+	cid "github.com/ipfs/go-cid"
+	ds "github.com/ipfs/go-datastore"
+	path "github.com/ipfs/go-path"
+	opts "github.com/ipfs/interface-go-ipfs-core/options/namesys"
+	isd "github.com/jbenet/go-is-domain"
+	ci "github.com/libp2p/go-libp2p-core/crypto"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	routing "github.com/libp2p/go-libp2p-core/routing"
 )
 
 // mpns (a multi-protocol NameSystem) implements generic IPFS naming.
@@ -31,14 +31,32 @@ type mpns struct {
 	dnsResolver, proquintResolver, ipnsResolver resolver
 	ipnsPublisher                               Publisher
 
-	cache *lru.Cache
+	staticMap map[string]path.Path
+	cache     *lru.Cache
 }
 
 // NewNameSystem will construct the IPFS naming system based on Routing
 func NewNameSystem(r routing.ValueStore, ds ds.Datastore, cachesize int) NameSystem {
-	var cache *lru.Cache
+	var (
+		cache     *lru.Cache
+		staticMap map[string]path.Path
+	)
 	if cachesize > 0 {
 		cache, _ = lru.New(cachesize)
+	}
+
+	// Prewarm namesys cache with static records for deterministic tests and debugging.
+	// Useful for testing things like DNSLink without real DNS lookup.
+	// Example:
+	// IPFS_NS_MAP="dnslink-test.example.com:/ipfs/bafkreicysg23kiwv34eg2d7qweipxwosdo2py4ldv42nbauguluen5v6am"
+	if list := os.Getenv("IPFS_NS_MAP"); list != "" {
+		staticMap = make(map[string]path.Path)
+		for _, pair := range strings.Split(list, ",") {
+			mapping := strings.SplitN(pair, ":", 2)
+			key := mapping[0]
+			value := path.FromString(mapping[1])
+			staticMap[key] = value
+		}
 	}
 
 	return &mpns{
@@ -46,10 +64,12 @@ func NewNameSystem(r routing.ValueStore, ds ds.Datastore, cachesize int) NameSys
 		proquintResolver: new(ProquintResolver),
 		ipnsResolver:     NewIpnsResolver(r),
 		ipnsPublisher:    NewIpnsPublisher(r, ds),
+		staticMap:        staticMap,
 		cache:            cache,
 	}
 }
 
+// DefaultResolverCacheTTL defines max ttl of a record placed in namesys cache.
 const DefaultResolverCacheTTL = time.Minute
 
 // Resolve implements Resolver.
@@ -66,16 +86,19 @@ func (ns *mpns) Resolve(ctx context.Context, name string, options ...opts.Resolv
 }
 
 func (ns *mpns) ResolveAsync(ctx context.Context, name string, options ...opts.ResolveOpt) <-chan Result {
-	res := make(chan Result, 1)
 	if strings.HasPrefix(name, "/ipfs/") {
 		p, err := path.ParsePath(name)
+		res := make(chan Result, 1)
 		res <- Result{p, err}
+		close(res)
 		return res
 	}
 
 	if !strings.HasPrefix(name, "/") {
 		p, err := path.ParsePath("/ipfs/" + name)
+		res := make(chan Result, 1)
 		res <- Result{p, err}
+		close(res)
 		return res
 	}
 
@@ -99,19 +122,45 @@ func (ns *mpns) resolveOnceAsync(ctx context.Context, name string, options opts.
 
 	key := segments[2]
 
-	if p, ok := ns.cacheGet(key); ok {
-		out <- onceResult{value: p}
-		close(out)
-		return out
-	}
-
 	// Resolver selection:
-	// 1. if it is a multihash resolve through "ipns".
+	// 1. if it is a PeerID/CID/multihash resolve through "ipns".
 	// 2. if it is a domain name, resolve through "dns"
 	// 3. otherwise resolve through the "proquint" resolver
 
 	var res resolver
-	if _, err := mh.FromB58String(key); err == nil {
+	ipnsKey, err := peer.Decode(key)
+
+	// CIDs in IPNS are expected to have libp2p-key multicodec
+	// We ease the transition by returning a more meaningful error with a valid CID
+	if err != nil && err.Error() == "can't convert CID of type protobuf to a peer ID" {
+		ipnsCid, cidErr := cid.Decode(key)
+		if cidErr == nil && ipnsCid.Version() == 1 && ipnsCid.Type() != cid.Libp2pKey {
+			fixedCid := cid.NewCidV1(cid.Libp2pKey, ipnsCid.Hash()).String()
+			codecErr := fmt.Errorf("peer ID represented as CIDv1 require libp2p-key multicodec: retry with /ipns/%s", fixedCid)
+			log.Debugf("RoutingResolver: could not convert public key hash %s to peer ID: %s\n", key, codecErr)
+			out <- onceResult{err: codecErr}
+			close(out)
+			return out
+		}
+	}
+
+	cacheKey := key
+	if err == nil {
+		cacheKey = string(ipnsKey)
+	}
+
+	if p, ok := ns.cacheGet(cacheKey); ok {
+		var err error
+		if len(segments) > 3 {
+			p, err = path.FromSegments("", strings.TrimRight(p.String(), "/"), segments[3])
+		}
+
+		out <- onceResult{value: p, err: err}
+		close(out)
+		return out
+	}
+
+	if err == nil {
 		res = ns.ipnsResolver
 	} else if isd.IsDomain(key) {
 		res = ns.dnsResolver
@@ -128,7 +177,7 @@ func (ns *mpns) resolveOnceAsync(ctx context.Context, name string, options opts.
 			case res, ok := <-resCh:
 				if !ok {
 					if best != (onceResult{}) {
-						ns.cacheSet(key, best.value, best.ttl)
+						ns.cacheSet(cacheKey, best.value, best.ttl)
 					}
 					return
 				}
@@ -136,16 +185,15 @@ func (ns *mpns) resolveOnceAsync(ctx context.Context, name string, options opts.
 					best = res
 				}
 				p := res.value
+				err := res.err
+				ttl := res.ttl
 
 				// Attach rest of the path
 				if len(segments) > 3 {
-					p, err := path.FromSegments("", strings.TrimRight(p.String(), "/"), segments[3])
-					if err != nil {
-						emitOnceResult(ctx, out, onceResult{value: p, ttl: res.ttl, err: err})
-					}
+					p, err = path.FromSegments("", strings.TrimRight(p.String(), "/"), segments[3])
 				}
 
-				emitOnceResult(ctx, out, onceResult{value: p, ttl: res.ttl, err: res.err})
+				emitOnceResult(ctx, out, onceResult{value: p, ttl: ttl, err: err})
 			case <-ctx.Done():
 				return
 			}
@@ -164,7 +212,7 @@ func emitOnceResult(ctx context.Context, outCh chan<- onceResult, r onceResult) 
 
 // Publish implements Publisher
 func (ns *mpns) Publish(ctx context.Context, name ci.PrivKey, value path.Path) error {
-	return ns.PublishWithEOL(ctx, name, value, time.Now().Add(DefaultRecordTTL))
+	return ns.PublishWithEOL(ctx, name, value, time.Now().Add(DefaultRecordEOL))
 }
 
 func (ns *mpns) PublishWithEOL(ctx context.Context, name ci.PrivKey, value path.Path, eol time.Time) error {
@@ -173,12 +221,18 @@ func (ns *mpns) PublishWithEOL(ctx context.Context, name ci.PrivKey, value path.
 		return err
 	}
 	if err := ns.ipnsPublisher.PublishWithEOL(ctx, name, value, eol); err != nil {
+		// Invalidate the cache. Publishing may _partially_ succeed but
+		// still return an error.
+		ns.cacheInvalidate(string(id))
 		return err
 	}
 	ttl := DefaultResolverCacheTTL
-	if ttEol := eol.Sub(time.Now()); ttEol < ttl {
+	if setTTL, ok := checkCtxTTL(ctx); ok {
+		ttl = setTTL
+	}
+	if ttEol := time.Until(eol); ttEol < ttl {
 		ttl = ttEol
 	}
-	ns.cacheSet(peer.IDB58Encode(id), value, ttl)
+	ns.cacheSet(string(id), value, ttl)
 	return nil
 }

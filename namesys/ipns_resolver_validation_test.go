@@ -5,27 +5,44 @@ import (
 	"testing"
 	"time"
 
-	path "gx/ipfs/QmdrpbDgeYH3VxkCciQCJY5LkDYdXtig6unDzQmMxFtWEw/go-path"
-
-	opts "github.com/ipfs/go-ipfs/namesys/opts"
-
-	testutil "gx/ipfs/QmNfQbgBfARAtrYsBguChX6VJ5nbjeoYy1KdC36aaYWqG8/go-testutil"
-	u "gx/ipfs/QmPdKqUcHGFdeSpvjVoaTRPPstGif9GBZb5Q56RVw9o69A/go-ipfs-util"
-	routing "gx/ipfs/QmPmFeQ5oY5G6M7aBWggi5phxEPXwsQntE1DFcUzETULdp/go-libp2p-routing"
-	ropts "gx/ipfs/QmPmFeQ5oY5G6M7aBWggi5phxEPXwsQntE1DFcUzETULdp/go-libp2p-routing/options"
-	ci "gx/ipfs/QmPvyPwuCgJ7pDmrKDxRtsScJgBaM5h4EpRL2qQJsmXf4n/go-libp2p-crypto"
-	mockrouting "gx/ipfs/QmQ9PR61a8rwEFuFNs7JMA1QtQC9yZnBwoDn51JWXDbaTd/go-ipfs-routing/mock"
-	offline "gx/ipfs/QmQ9PR61a8rwEFuFNs7JMA1QtQC9yZnBwoDn51JWXDbaTd/go-ipfs-routing/offline"
-	record "gx/ipfs/QmSb4B8ZAAj5ALe9LjfzPyF8Ma6ezC1NTnDF2JQPUJxEXb/go-libp2p-record"
-	pstore "gx/ipfs/QmWtCpWB39Rzc2xTB75MKorsxNpo3TyecTEN24CJ3KVohE/go-libp2p-peerstore"
-	pstoremem "gx/ipfs/QmWtCpWB39Rzc2xTB75MKorsxNpo3TyecTEN24CJ3KVohE/go-libp2p-peerstore/pstoremem"
-	ipns "gx/ipfs/QmX72XT6sSQRkNHKcAFLM2VqB3B4bWPetgWnHY8LgsUVeT/go-ipns"
-	ds "gx/ipfs/QmaRb5yNXKonhbkpNxNawoydk4N6es6b4fPj19sjEKsh5D/go-datastore"
-	dssync "gx/ipfs/QmaRb5yNXKonhbkpNxNawoydk4N6es6b4fPj19sjEKsh5D/go-datastore/sync"
-	peer "gx/ipfs/QmbNepETomvmXfz1X5pHNFD2QuPqnqi47dTd94QJWSorQ3/go-libp2p-peer"
+	ds "github.com/ipfs/go-datastore"
+	dssync "github.com/ipfs/go-datastore/sync"
+	mockrouting "github.com/ipfs/go-ipfs-routing/mock"
+	offline "github.com/ipfs/go-ipfs-routing/offline"
+	ipns "github.com/ipfs/go-ipns"
+	ipns_pb "github.com/ipfs/go-ipns/pb"
+	path "github.com/ipfs/go-path"
+	opts "github.com/ipfs/interface-go-ipfs-core/options/namesys"
+	ci "github.com/libp2p/go-libp2p-core/crypto"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	pstore "github.com/libp2p/go-libp2p-core/peerstore"
+	routing "github.com/libp2p/go-libp2p-core/routing"
+	"github.com/libp2p/go-libp2p-core/test"
+	pstoremem "github.com/libp2p/go-libp2p-peerstore/pstoremem"
+	record "github.com/libp2p/go-libp2p-record"
+	testutil "github.com/libp2p/go-libp2p-testing/net"
 )
 
 func TestResolverValidation(t *testing.T) {
+	t.Run("RSA",
+		func(t *testing.T) {
+			testResolverValidation(t, ci.RSA)
+		})
+	t.Run("Ed25519",
+		func(t *testing.T) {
+			testResolverValidation(t, ci.Ed25519)
+		})
+	t.Run("ECDSA",
+		func(t *testing.T) {
+			testResolverValidation(t, ci.ECDSA)
+		})
+	t.Run("Secp256k1",
+		func(t *testing.T) {
+			testResolverValidation(t, ci.Secp256k1)
+		})
+}
+
+func testResolverValidation(t *testing.T, keyType int) {
 	ctx := context.Background()
 	rid := testutil.RandIdentityOrFatal(t)
 	dstore := dssync.MutexWrap(ds.NewMapDatastore())
@@ -37,16 +54,10 @@ func TestResolverValidation(t *testing.T) {
 	nvVstore := offline.NewOfflineRouter(dstore, mockrouting.MockValidator{})
 
 	// Create entry with expiry in one hour
-	priv, id, _, ipnsDHTPath := genKeys(t)
+	priv, id, _, ipnsDHTPath := genKeys(t, keyType)
 	ts := time.Now()
 	p := []byte("/ipfs/QmfM2r8seH2GiRaC4esTjeraXEachRt8ZsSeGaWTPLyMoG")
-	entry, err := ipns.Create(priv, p, 1, ts.Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Make peer's public key available in peer store
-	err = peerstore.AddPubKey(id, priv.GetPublic())
+	entry, err := createIPNSRecordWithEmbeddedPublicKey(priv, p, 1, ts.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +77,7 @@ func TestResolverValidation(t *testing.T) {
 		t.Fatalf("Mismatch between published path %s and resolved path %s", p, resp)
 	}
 	// Create expired entry
-	expiredEntry, err := ipns.Create(priv, p, 1, ts.Add(-1*time.Hour))
+	expiredEntry, err := createIPNSRecordWithEmbeddedPublicKey(priv, p, 1, ts.Add(-1*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,11 +95,23 @@ func TestResolverValidation(t *testing.T) {
 	}
 
 	// Create IPNS record path with a different private key
-	priv2, id2, _, ipnsDHTPath2 := genKeys(t)
+	priv2, id2, _, ipnsDHTPath2 := genKeys(t, keyType)
 
-	// Make peer's public key available in peer store
-	err = peerstore.AddPubKey(id2, priv2.GetPublic())
+	// Publish entry
+	err = PublishEntry(ctx, nvVstore, ipnsDHTPath2, entry)
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Record should fail validation because public key defined by
+	// ipns path doesn't match record signature
+	_, err = resolve(ctx, resolver, id2.Pretty(), opts.DefaultResolveOpts())
+	if err == nil {
+		t.Fatal("ValidateIpnsRecord should have failed signature verification")
+	}
+
+	// Try embedding the incorrect private key inside the entry
+	if err := ipns.EmbedPublicKey(priv2.GetPublic(), entry); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,55 +127,35 @@ func TestResolverValidation(t *testing.T) {
 	if err == nil {
 		t.Fatal("ValidateIpnsRecord should have failed signature verification")
 	}
-
-	// Publish entry without making public key available in peer store
-	priv3, id3, pubkDHTPath3, ipnsDHTPath3 := genKeys(t)
-	entry3, err := ipns.Create(priv3, p, 1, ts.Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = PublishEntry(ctx, nvVstore, ipnsDHTPath3, entry3)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Record should fail validation because public key is not available
-	// in peer store or on network
-	_, err = resolve(ctx, resolver, id3.Pretty(), opts.DefaultResolveOpts())
-	if err == nil {
-		t.Fatal("ValidateIpnsRecord should have failed because public key was not found")
-	}
-
-	// Publish public key to the network
-	err = PublishPublicKey(ctx, vstore, pubkDHTPath3, priv3.GetPublic())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Record should now pass validation because resolver will ensure
-	// public key is available in the peer store by looking it up in
-	// the DHT, which causes the DHT to fetch it and cache it in the
-	// peer store
-	_, err = resolve(ctx, resolver, id3.Pretty(), opts.DefaultResolveOpts())
-	if err != nil {
-		t.Fatal(err)
-	}
 }
 
-func genKeys(t *testing.T) (ci.PrivKey, peer.ID, string, string) {
-	sr := u.NewTimeSeededRand()
-	priv, _, err := ci.GenerateKeyPairWithReader(ci.RSA, 1024, sr)
+func genKeys(t *testing.T, keyType int) (ci.PrivKey, peer.ID, string, string) {
+	bits := 0
+	if keyType == ci.RSA {
+		bits = 2048
+	}
+
+	sk, pk, err := test.RandTestKeyPair(keyType, bits)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Create entry with expiry in one hour
-	pid, err := peer.IDFromPrivateKey(priv)
+	id, err := peer.IDFromPublicKey(pk)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return sk, id, PkKeyForID(id), ipns.RecordKey(id)
+}
 
-	return priv, pid, PkKeyForID(pid), ipns.RecordKey(pid)
+func createIPNSRecordWithEmbeddedPublicKey(sk ci.PrivKey, val []byte, seq uint64, eol time.Time) (*ipns_pb.IpnsEntry, error) {
+	entry, err := ipns.Create(sk, val, seq, eol)
+	if err != nil {
+		return nil, err
+	}
+	if err := ipns.EmbedPublicKey(sk.GetPublic(), entry); err != nil {
+		return nil, err
+	}
+
+	return entry, nil
 }
 
 type mockValueStore struct {
@@ -170,11 +173,11 @@ func newMockValueStore(id testutil.Identity, dstore ds.Datastore, kbook pstore.K
 	}
 }
 
-func (m *mockValueStore) GetValue(ctx context.Context, k string, opts ...ropts.Option) ([]byte, error) {
+func (m *mockValueStore) GetValue(ctx context.Context, k string, opts ...routing.Option) ([]byte, error) {
 	return m.r.GetValue(ctx, k, opts...)
 }
 
-func (m *mockValueStore) SearchValue(ctx context.Context, k string, opts ...ropts.Option) (<-chan []byte, error) {
+func (m *mockValueStore) SearchValue(ctx context.Context, k string, opts ...routing.Option) (<-chan []byte, error) {
 	return m.r.SearchValue(ctx, k, opts...)
 }
 
@@ -198,6 +201,6 @@ func (m *mockValueStore) GetPublicKey(ctx context.Context, p peer.ID) (ci.PubKey
 	return pk, m.kbook.AddPubKey(p, pk)
 }
 
-func (m *mockValueStore) PutValue(ctx context.Context, k string, d []byte, opts ...ropts.Option) error {
+func (m *mockValueStore) PutValue(ctx context.Context, k string, d []byte, opts ...routing.Option) error {
 	return m.r.PutValue(ctx, k, d, opts...)
 }

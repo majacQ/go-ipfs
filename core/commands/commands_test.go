@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	cmds "gx/ipfs/QmRRovo1DE6i5cMjCbf19mQCSuszF6SKwdZNUMS7MtBnH1/go-ipfs-cmds"
+	cmds "github.com/ipfs/go-ipfs-cmds"
 )
 
 func collectPaths(prefix string, cmd *cmds.Command, out map[string]struct{}) {
@@ -25,6 +25,7 @@ func TestROCommands(t *testing.T) {
 		"/dag",
 		"/dag/get",
 		"/dag/resolve",
+		"/dag/stat",
 		"/dns",
 		"/get",
 		"/ls",
@@ -95,8 +96,11 @@ func TestCommands(t *testing.T) {
 		"/config/profile/apply",
 		"/dag",
 		"/dag/get",
+		"/dag/export",
 		"/dag/put",
+		"/dag/import",
 		"/dag/resolve",
+		"/dag/stat",
 		"/dht",
 		"/dht/findpeer",
 		"/dht/findprovs",
@@ -131,9 +135,12 @@ func TestCommands(t *testing.T) {
 		"/id",
 		"/key",
 		"/key/gen",
+		"/key/export",
+		"/key/import",
 		"/key/list",
 		"/key/rename",
 		"/key/rm",
+		"/key/rotate",
 		"/log",
 		"/log/level",
 		"/log/ls",
@@ -170,11 +177,19 @@ func TestCommands(t *testing.T) {
 		"/p2p/stream/ls",
 		"/pin",
 		"/pin/add",
-		"/ping",
 		"/pin/ls",
+		"/pin/remote",
+		"/pin/remote/add",
+		"/pin/remote/ls",
+		"/pin/remote/rm",
+		"/pin/remote/service",
+		"/pin/remote/service/add",
+		"/pin/remote/service/ls",
+		"/pin/remote/service/rm",
 		"/pin/rm",
 		"/pin/update",
 		"/pin/verify",
+		"/ping",
 		"/pubsub",
 		"/pubsub/ls",
 		"/pubsub/peers",
@@ -193,6 +208,7 @@ func TestCommands(t *testing.T) {
 		"/stats",
 		"/stats/bitswap",
 		"/stats/bw",
+		"/stats/dht",
 		"/stats/repo",
 		"/swarm",
 		"/swarm/addrs",
@@ -211,6 +227,7 @@ func TestCommands(t *testing.T) {
 		"/urlstore",
 		"/urlstore/add",
 		"/version",
+		"/version/deps",
 		"/cid",
 		"/cid/format",
 		"/cid/base32",

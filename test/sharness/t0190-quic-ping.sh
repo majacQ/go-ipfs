@@ -8,16 +8,11 @@ test_init_ipfs
 
 # start iptb + wait for peering
 test_expect_success 'init iptb' '
-  iptb init -n 2 --bootstrap=none --port=0
+  iptb testbed create -type localipfs -count 2 -init
 '
 
-test_expect_success "enable QUIC experiment" '
-  ipfsi 0 config --json Experimental.QUIC true &&
-  ipfsi 1 config --json Experimental.QUIC true
-'
-
-addr1='"[\"/ip4/127.0.0.1/udp/0/quic/\"]"'
-addr2='"[\"/ip4/127.0.0.1/udp/0/quic/\"]"'
+addr1='"[\"/ip4/127.0.0.1/udp/0/quic\"]"'
+addr2='"[\"/ip4/127.0.0.1/udp/0/quic\"]"'
 test_expect_success "add QUIC swarm addresses" '
   ipfsi 0 config --json Addresses.Swarm '$addr1' &&
   ipfsi 1 config --json Addresses.Swarm '$addr2'
@@ -26,8 +21,8 @@ test_expect_success "add QUIC swarm addresses" '
 startup_cluster 2
 
 test_expect_success 'peer ids' '
-  PEERID_0=$(iptb get id 0) &&
-  PEERID_1=$(iptb get id 1)
+  PEERID_0=$(iptb attr get 0 id) &&
+  PEERID_1=$(iptb attr get 1 id)
 '
 
 test_expect_success "test ping other" '
