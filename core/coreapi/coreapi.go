@@ -18,31 +18,31 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ipfs/go-ipfs/core"
-	"github.com/ipfs/go-ipfs/namesys"
-	"github.com/ipfs/go-ipfs/pin"
-	"github.com/ipfs/go-ipfs/repo"
-
 	bserv "github.com/ipfs/go-blockservice"
 	"github.com/ipfs/go-ipfs-blockstore"
 	"github.com/ipfs/go-ipfs-exchange-interface"
 	offlinexch "github.com/ipfs/go-ipfs-exchange-offline"
+	"github.com/ipfs/go-ipfs-pinner"
+	"github.com/ipfs/go-ipfs-provider"
 	offlineroute "github.com/ipfs/go-ipfs-routing/offline"
 	ipld "github.com/ipfs/go-ipld-format"
-	logging "github.com/ipfs/go-log"
 	dag "github.com/ipfs/go-merkledag"
 	coreiface "github.com/ipfs/interface-go-ipfs-core"
 	"github.com/ipfs/interface-go-ipfs-core/options"
-	ci "github.com/libp2p/go-libp2p-crypto"
-	p2phost "github.com/libp2p/go-libp2p-host"
-	"github.com/libp2p/go-libp2p-peer"
-	pstore "github.com/libp2p/go-libp2p-peerstore"
+	ci "github.com/libp2p/go-libp2p-core/crypto"
+	p2phost "github.com/libp2p/go-libp2p-core/host"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	pstore "github.com/libp2p/go-libp2p-core/peerstore"
+	routing "github.com/libp2p/go-libp2p-core/routing"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	record "github.com/libp2p/go-libp2p-record"
-	"github.com/libp2p/go-libp2p-routing"
-)
+	madns "github.com/multiformats/go-multiaddr-dns"
 
-var log = logging.Logger("core/coreapi")
+	"github.com/ipfs/go-ipfs/core"
+	"github.com/ipfs/go-ipfs/core/node"
+	"github.com/ipfs/go-ipfs/repo"
+	"github.com/ipfs/go-namesys"
+)
 
 type CoreAPI struct {
 	nctx context.Context
@@ -63,8 +63,11 @@ type CoreAPI struct {
 	recordValidator record.Validator
 	exchange        exchange.Interface
 
-	namesys namesys.NameSystem
-	routing routing.IpfsRouting
+	namesys     namesys.NameSystem
+	routing     routing.Routing
+	dnsResolver *madns.Resolver
+
+	provider provider.System
 
 	pubSub *pubsub.PubSub
 
@@ -173,6 +176,9 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 		recordValidator: n.RecordValidator,
 		exchange:        n.Exchange,
 		routing:         n.Routing,
+		dnsResolver:     n.DNSResolver,
+
+		provider: n.Provider,
 
 		pubSub: n.PubSub,
 
@@ -202,14 +208,23 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 
 		cs := cfg.Ipns.ResolveCacheSize
 		if cs == 0 {
-			cs = core.DefaultIpnsCacheSize
+			cs = node.DefaultIpnsCacheSize
 		}
 		if cs < 0 {
 			return nil, fmt.Errorf("cannot specify negative resolve cache size")
 		}
 
 		subApi.routing = offlineroute.NewOfflineRouter(subApi.repo.Datastore(), subApi.recordValidator)
-		subApi.namesys = namesys.NewNameSystem(subApi.routing, subApi.repo.Datastore(), cs)
+
+		subApi.namesys, err = namesys.NewNameSystem(subApi.routing,
+			namesys.WithDatastore(subApi.repo.Datastore()),
+			namesys.WithDNSResolver(subApi.dnsResolver),
+			namesys.WithCache(cs))
+		if err != nil {
+			return nil, fmt.Errorf("error constructing namesys: %w", err)
+		}
+
+		subApi.provider = provider.NewOfflineProvider()
 
 		subApi.peerstore = nil
 		subApi.peerHost = nil

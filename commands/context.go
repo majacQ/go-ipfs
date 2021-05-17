@@ -10,7 +10,7 @@ import (
 	coreapi "github.com/ipfs/go-ipfs/core/coreapi"
 	loader "github.com/ipfs/go-ipfs/plugin/loader"
 
-	"github.com/ipfs/go-ipfs-cmds"
+	cmds "github.com/ipfs/go-ipfs-cmds"
 	config "github.com/ipfs/go-ipfs-config"
 	logging "github.com/ipfs/go-log"
 	coreiface "github.com/ipfs/interface-go-ipfs-core"
@@ -48,6 +48,10 @@ func (c *Context) GetConfig() (*config.Config, error) {
 	return c.config, err
 }
 
+func (c *Context) GetConfigNoCache() (*config.Config, error) {
+	return c.LoadConfig(c.ConfigRoot)
+}
+
 // GetNode returns the node of the current Command execution
 // context. It may construct it with the provided function.
 func (c *Context) GetNode() (*core.IpfsNode, error) {
@@ -57,6 +61,12 @@ func (c *Context) GetNode() (*core.IpfsNode, error) {
 			return nil, errors.New("nil ConstructNode function")
 		}
 		c.node, err = c.ConstructNode()
+		if err == nil {
+			// Pre-load the config from the repo to avoid re-parsing it from disk.
+			if cfg, err := c.node.Repo.Config(); err != nil {
+				c.config = cfg
+			}
+		}
 	}
 	return c.node, err
 }
@@ -107,7 +117,6 @@ func (c *Context) LogRequest(req *cmds.Request) func() {
 		Command:   strings.Join(req.Path, "/"),
 		Options:   req.Options,
 		Args:      req.Arguments,
-		ID:        c.ReqLog.nextID,
 		log:       c.ReqLog,
 	}
 	c.ReqLog.AddEntry(rle)
