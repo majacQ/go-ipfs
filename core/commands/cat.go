@@ -6,11 +6,12 @@ import (
 	"io"
 	"os"
 
-	cmdenv "github.com/ipfs/go-ipfs/core/commands/cmdenv"
-	"github.com/ipfs/go-ipfs/core/coreapi/interface"
+	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
 
-	cmds "gx/ipfs/QmRRovo1DE6i5cMjCbf19mQCSuszF6SKwdZNUMS7MtBnH1/go-ipfs-cmds"
-	"gx/ipfs/Qmde5VP1qUkyQXKCfmEUA7bP64V2HAptbJ7phuPp7jXWwg/go-ipfs-cmdkit"
+	"github.com/ipfs/go-ipfs-cmds"
+	"github.com/ipfs/go-ipfs-files"
+	"github.com/ipfs/interface-go-ipfs-core"
+	"github.com/ipfs/interface-go-ipfs-core/path"
 )
 
 const (
@@ -20,33 +21,22 @@ const (
 )
 
 var CatCmd = &cmds.Command{
-	Helptext: cmdkit.HelpText{
+	Helptext: cmds.HelpText{
 		Tagline:          "Show IPFS object data.",
 		ShortDescription: "Displays the data contained by an IPFS or IPNS object(s) at the given path.",
 	},
 
-	Arguments: []cmdkit.Argument{
-		cmdkit.StringArg("ipfs-path", true, true, "The path to the IPFS object(s) to be outputted.").EnableStdin(),
+	Arguments: []cmds.Argument{
+		cmds.StringArg("ipfs-path", true, true, "The path to the IPFS object(s) to be outputted.").EnableStdin(),
 	},
-	Options: []cmdkit.Option{
-		cmdkit.Int64Option(offsetOptionName, "o", "Byte offset to begin reading from."),
-		cmdkit.Int64Option(lengthOptionName, "l", "Maximum number of bytes to read."),
+	Options: []cmds.Option{
+		cmds.Int64Option(offsetOptionName, "o", "Byte offset to begin reading from."),
+		cmds.Int64Option(lengthOptionName, "l", "Maximum number of bytes to read."),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
-		node, err := cmdenv.GetNode(env)
+		api, err := cmdenv.GetApi(env, req)
 		if err != nil {
 			return err
-		}
-
-		api, err := cmdenv.GetApi(env)
-		if err != nil {
-			return err
-		}
-
-		if !node.OnlineMode() {
-			if err := node.SetupOfflineRouting(); err != nil {
-				return err
-			}
 		}
 
 		offset, _ := req.Options[offsetOptionName].(int64)
@@ -55,9 +45,7 @@ var CatCmd = &cmds.Command{
 		}
 
 		max, found := req.Options[lengthOptionName].(int64)
-		if err != nil {
-			return err
-		}
+
 		if max < 0 {
 			return fmt.Errorf("cannot specify negative length")
 		}
@@ -77,7 +65,7 @@ var CatCmd = &cmds.Command{
 
 		/*
 			if err := corerepo.ConditionalGC(req.Context, node, length); err != nil {
-				re.SetError(err, cmdkit.ErrNormal)
+				re.SetError(err, cmds.ErrNormal)
 				return
 			}
 		*/
@@ -116,7 +104,7 @@ var CatCmd = &cmds.Command{
 						return err
 					}
 				default:
-					log.Warningf("cat postrun: received unexpected type %T", val)
+					log.Warnf("cat postrun: received unexpected type %T", val)
 				}
 			}
 		},
@@ -130,37 +118,54 @@ func cat(ctx context.Context, api iface.CoreAPI, paths []string, offset int64, m
 		return nil, 0, nil
 	}
 	for _, p := range paths {
-		fpath, err := iface.ParsePath(p)
+		f, err := api.Unixfs().Get(ctx, path.New(p))
 		if err != nil {
 			return nil, 0, err
 		}
 
-		read, err := api.Unixfs().Cat(ctx, fpath)
+		var file files.File
+		switch f := f.(type) {
+		case files.File:
+			file = f
+		case files.Directory:
+			return nil, 0, iface.ErrIsDir
+		default:
+			return nil, 0, iface.ErrNotSupported
+		}
+
+		fsize, err := file.Size()
 		if err != nil {
 			return nil, 0, err
 		}
-		if offset > int64(read.Size()) {
-			offset = offset - int64(read.Size())
+
+		if offset > fsize {
+			offset = offset - fsize
 			continue
 		}
-		count, err := read.Seek(offset, io.SeekStart)
+
+		count, err := file.Seek(offset, io.SeekStart)
 		if err != nil {
 			return nil, 0, err
 		}
 		offset = 0
 
-		size := uint64(read.Size() - uint64(count))
+		fsize, err = file.Size()
+		if err != nil {
+			return nil, 0, err
+		}
+
+		size := uint64(fsize - count)
 		length += size
 		if max > 0 && length >= uint64(max) {
-			var r io.Reader = read
+			var r io.Reader = file
 			if overshoot := int64(length - uint64(max)); overshoot != 0 {
-				r = io.LimitReader(read, int64(size)-overshoot)
+				r = io.LimitReader(file, int64(size)-overshoot)
 				length = uint64(max)
 			}
 			readers = append(readers, r)
 			break
 		}
-		readers = append(readers, read)
+		readers = append(readers, file)
 	}
 	return readers, length, nil
 }

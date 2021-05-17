@@ -1,10 +1,10 @@
 package p2p
 
 import (
-	pstore "gx/ipfs/QmWtCpWB39Rzc2xTB75MKorsxNpo3TyecTEN24CJ3KVohE/go-libp2p-peerstore"
-	logging "gx/ipfs/QmZChCsSt8DctjceaL56Eibc29CVQq4dGKRXC5JRZ6Ppae/go-log"
-	peer "gx/ipfs/QmbNepETomvmXfz1X5pHNFD2QuPqnqi47dTd94QJWSorQ3/go-libp2p-peer"
-	p2phost "gx/ipfs/Qmf5yHzmWAyHSJRPAmZzfk3Yd7icydBLi7eec5741aov7v/go-libp2p-host"
+	logging "github.com/ipfs/go-log"
+	p2phost "github.com/libp2p/go-libp2p-core/host"
+	peer "github.com/libp2p/go-libp2p-core/peer"
+	pstore "github.com/libp2p/go-libp2p-core/peerstore"
 )
 
 var log = logging.Logger("p2p-mount")
@@ -20,8 +20,8 @@ type P2P struct {
 	peerstore pstore.Peerstore
 }
 
-// NewP2P creates new P2P struct
-func NewP2P(identity peer.ID, peerHost p2phost.Host, peerstore pstore.Peerstore) *P2P {
+// New creates new P2P struct
+func New(identity peer.ID, peerHost p2phost.Host, peerstore pstore.Peerstore) *P2P {
 	return &P2P{
 		identity:  identity,
 		peerHost:  peerHost,

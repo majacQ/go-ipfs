@@ -5,25 +5,26 @@ import (
 	"fmt"
 	gopath "path"
 
-	"github.com/ipfs/go-ipfs/core"
-	coreiface "github.com/ipfs/go-ipfs/core/coreapi/interface"
-	uio "gx/ipfs/QmWE6Ftsk98cG2MTVgH4wJT8VP2nL9TuBkYTrz9GSqcsh5/go-unixfs/io"
-	ipfspath "gx/ipfs/QmdrpbDgeYH3VxkCciQCJY5LkDYdXtig6unDzQmMxFtWEw/go-path"
-	"gx/ipfs/QmdrpbDgeYH3VxkCciQCJY5LkDYdXtig6unDzQmMxFtWEw/go-path/resolver"
+	"github.com/ipfs/go-namesys/resolve"
 
-	"gx/ipfs/QmPSQnBKM9g7BaUcZCvswUJVscQ1ipjmwxN5PXCjkp9EQ7/go-cid"
-	ipld "gx/ipfs/QmdDXJs4axxefSPgK6Y1QhpJWKuDPnGJiqgq4uncb4rFHL/go-ipld-format"
+	"github.com/ipfs/go-cid"
+	ipld "github.com/ipfs/go-ipld-format"
+	ipfspath "github.com/ipfs/go-path"
+	"github.com/ipfs/go-path/resolver"
+	uio "github.com/ipfs/go-unixfs/io"
+	coreiface "github.com/ipfs/interface-go-ipfs-core"
+	path "github.com/ipfs/interface-go-ipfs-core/path"
 )
 
 // ResolveNode resolves the path `p` using Unixfs resolver, gets and returns the
 // resolved Node.
-func (api *CoreAPI) ResolveNode(ctx context.Context, p coreiface.Path) (ipld.Node, error) {
+func (api *CoreAPI) ResolveNode(ctx context.Context, p path.Path) (ipld.Node, error) {
 	rp, err := api.ResolvePath(ctx, p)
 	if err != nil {
 		return nil, err
 	}
 
-	node, err := api.node.DAG.Get(ctx, rp.Cid())
+	node, err := api.dag.Get(ctx, rp.Cid())
 	if err != nil {
 		return nil, err
 	}
@@ -32,14 +33,17 @@ func (api *CoreAPI) ResolveNode(ctx context.Context, p coreiface.Path) (ipld.Nod
 
 // ResolvePath resolves the path `p` using Unixfs resolver, returns the
 // resolved path.
-func (api *CoreAPI) ResolvePath(ctx context.Context, p coreiface.Path) (coreiface.ResolvedPath, error) {
-	if _, ok := p.(coreiface.ResolvedPath); ok {
-		return p.(coreiface.ResolvedPath), nil
+func (api *CoreAPI) ResolvePath(ctx context.Context, p path.Path) (path.Resolved, error) {
+	if _, ok := p.(path.Resolved); ok {
+		return p.(path.Resolved), nil
+	}
+	if err := p.IsValid(); err != nil {
+		return nil, err
 	}
 
 	ipath := ipfspath.Path(p.String())
-	ipath, err := core.ResolveIPNS(ctx, api.node.Namesys, ipath)
-	if err == core.ErrNoNamesys {
+	ipath, err := resolve.ResolveIPNS(ctx, api.namesys, ipath)
+	if err == resolve.ErrNoNamesys {
 		return nil, coreiface.ErrOffline
 	} else if err != nil {
 		return nil, err
@@ -57,7 +61,7 @@ func (api *CoreAPI) ResolvePath(ctx context.Context, p coreiface.Path) (coreifac
 	}
 
 	r := &resolver.Resolver{
-		DAG:         api.node.DAG,
+		DAG:         api.dag,
 		ResolveOnce: resolveOnce,
 	}
 
@@ -71,5 +75,5 @@ func (api *CoreAPI) ResolvePath(ctx context.Context, p coreiface.Path) (coreifac
 		return nil, err
 	}
 
-	return coreiface.NewResolvedPath(ipath, node, root, gopath.Join(rest...)), nil
+	return path.NewResolvedPath(ipath, node, root, gopath.Join(rest...)), nil
 }

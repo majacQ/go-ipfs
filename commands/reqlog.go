@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"strings"
 	"sync"
 	"time"
 )
@@ -34,35 +33,18 @@ type ReqLog struct {
 	keep     time.Duration
 }
 
-// Add creates a ReqLogEntry from a request and adds it to the log
-func (rl *ReqLog) Add(req Request) *ReqLogEntry {
-	rle := &ReqLogEntry{
-		StartTime: time.Now(),
-		Active:    true,
-		Command:   strings.Join(req.Path(), "/"),
-		Options:   req.Options(),
-		Args:      req.StringArguments(),
-		ID:        rl.nextID,
-		log:       rl,
-	}
-
-	rl.AddEntry(rle)
-	return rle
-}
-
 // AddEntry adds an entry to the log
 func (rl *ReqLog) AddEntry(rle *ReqLogEntry) {
 	rl.lock.Lock()
 	defer rl.lock.Unlock()
 
+	rle.ID = rl.nextID
 	rl.nextID++
 	rl.Requests = append(rl.Requests, rle)
 
 	if rle == nil || !rle.Active {
 		rl.maybeCleanup()
 	}
-
-	return
 }
 
 // ClearInactive removes stale entries
