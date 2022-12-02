@@ -115,7 +115,7 @@ test_pins_error_reporting() {
 
   test_expect_success "'ipfs pin add $PIN_ARGS' on non-existent hash should fail" '
     test_must_fail ipfs pin add $PIN_ARGS $RANDOM_HASH 2> err &&
-    grep -q "not found" err
+    grep -q "ipld: could not find" err
   '
 }
 
@@ -147,7 +147,7 @@ test_pin_dag() {
   test_expect_success "pin file, should fail" '
     test_must_fail ipfs pin add --recursive=true $HASH 2> err &&
     cat err &&
-    grep -q "not found" err
+    grep -q "ipld: could not find" err
   '
 }
 
@@ -180,7 +180,7 @@ test_pin_dag --raw-leaves
 
 test_pin_progress
 
-test_launch_ipfs_daemon --offline
+test_launch_ipfs_daemon_without_network
 
 test_pins '' '' ''
 test_pins --progress '' ''

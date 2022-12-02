@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/ipfs/go-ipfs/plugin"
-	"github.com/ipfs/go-ipfs/repo"
-	"github.com/ipfs/go-ipfs/repo/fsrepo"
+	"github.com/ipfs/kubo/plugin"
+	"github.com/ipfs/kubo/repo"
+	"github.com/ipfs/kubo/repo/fsrepo"
 
 	levelds "github.com/ipfs/go-ds-leveldb"
 	ldbopts "github.com/syndtr/goleveldb/leveldb/opt"
@@ -54,12 +54,12 @@ func (*leveldsPlugin) DatastoreConfigParser() fsrepo.ConfigFromMap {
 			return nil, fmt.Errorf("'path' field is missing or not string")
 		}
 
-		switch cm := params["compression"].(string); cm {
+		switch cm := params["compression"]; cm {
 		case "none":
 			c.compression = ldbopts.NoCompression
 		case "snappy":
 			c.compression = ldbopts.SnappyCompression
-		case "":
+		case "", nil:
 			c.compression = ldbopts.DefaultCompression
 		default:
 			return nil, fmt.Errorf("unrecognized value for compression: %s", cm)

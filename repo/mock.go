@@ -1,12 +1,14 @@
 package repo
 
 import (
+	"context"
 	"errors"
+	"net"
 
 	filestore "github.com/ipfs/go-filestore"
-	keystore "github.com/ipfs/go-ipfs/keystore"
+	keystore "github.com/ipfs/go-ipfs-keystore"
 
-	config "github.com/ipfs/go-ipfs-config"
+	config "github.com/ipfs/kubo/config"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
@@ -43,11 +45,13 @@ func (m *Mock) GetConfigKey(key string) (interface{}, error) {
 
 func (m *Mock) Datastore() Datastore { return m.D }
 
-func (m *Mock) GetStorageUsage() (uint64, error) { return 0, nil }
+func (m *Mock) GetStorageUsage(_ context.Context) (uint64, error) { return 0, nil }
 
 func (m *Mock) Close() error { return m.D.Close() }
 
 func (m *Mock) SetAPIAddr(addr ma.Multiaddr) error { return errTODO }
+
+func (m *Mock) SetGatewayAddr(addr net.Addr) error { return errTODO }
 
 func (m *Mock) Keystore() keystore.Keystore { return m.K }
 

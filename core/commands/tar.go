@@ -4,15 +4,16 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
-	tar "github.com/ipfs/go-ipfs/tar"
+	cmds "github.com/ipfs/go-ipfs-cmds"
+	"github.com/ipfs/kubo/core/commands/cmdenv"
+	tar "github.com/ipfs/kubo/tar"
 
-	"github.com/ipfs/go-ipfs-cmds"
 	dag "github.com/ipfs/go-merkledag"
 	path "github.com/ipfs/interface-go-ipfs-core/path"
 )
 
 var TarCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7951
 	Helptext: cmds.HelpText{
 		Tagline: "Utility functions for tar files in ipfs.",
 	},
@@ -24,8 +25,9 @@ var TarCmd = &cmds.Command{
 }
 
 var tarAddCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7951
 	Helptext: cmds.HelpText{
-		Tagline: "Import a tar file into ipfs.",
+		Tagline: "Import a tar file into IPFS.",
 		ShortDescription: `
 'ipfs tar add' will parse a tar file and create a merkledag structure to
 represent it.
@@ -74,6 +76,7 @@ represent it.
 }
 
 var tarCatCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7951
 	Helptext: cmds.HelpText{
 		Tagline: "Export a tar file from IPFS.",
 		ShortDescription: `

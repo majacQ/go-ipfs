@@ -55,6 +55,7 @@ the event log.
 			One of: debug, info, warn, error, dpanic, panic, fatal.
 		`),
 	},
+	NoLocal: true,
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
 		args := req.Arguments
 		subsystem, level := args[0], args[1]
@@ -104,10 +105,13 @@ subsystems of a running daemon.
 }
 
 var logTailCmd = &cmds.Command{
+	Status: cmds.Experimental,
 	Helptext: cmds.HelpText{
 		Tagline: "Read the event log.",
 		ShortDescription: `
 Outputs event log messages (not other log messages) as they are generated.
+
+Currently broken. Follow https://github.com/ipfs/kubo/issues/9245 for updates.
 `,
 	},
 

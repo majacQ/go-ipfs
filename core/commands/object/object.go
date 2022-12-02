@@ -5,14 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"text/tabwriter"
 
-	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
+	cmds "github.com/ipfs/go-ipfs-cmds"
+	"github.com/ipfs/kubo/core/commands/cmdenv"
 
 	humanize "github.com/dustin/go-humanize"
 	"github.com/ipfs/go-cid"
-	"github.com/ipfs/go-ipfs-cmds"
 	ipld "github.com/ipfs/go-ipld-format"
 	dag "github.com/ipfs/go-merkledag"
 	"github.com/ipfs/interface-go-ipfs-core/options"
@@ -47,11 +46,12 @@ const (
 )
 
 var ObjectCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7936
 	Helptext: cmds.HelpText{
-		Tagline: "Interact with IPFS objects.",
+		Tagline: "Deprecated commands to interact with dag-pb objects. Use 'dag' or 'files' instead.",
 		ShortDescription: `
-'ipfs object' is a plumbing command used to manipulate DAG objects
-directly.`,
+'ipfs object' is a legacy plumbing command used to manipulate dag-pb objects
+directly. Deprecated, use more modern 'ipfs dag' and 'ipfs files' instead.`,
 	},
 
 	Subcommands: map[string]*cmds.Command{
@@ -68,15 +68,18 @@ directly.`,
 
 // ObjectDataCmd object data command
 var ObjectDataCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7936
 	Helptext: cmds.HelpText{
-		Tagline: "Output the raw bytes of an IPFS object.",
+		Tagline: "Deprecated way to read the raw bytes of a dag-pb object: use 'dag get' instead.",
 		ShortDescription: `
-'ipfs object data' is a plumbing command for retrieving the raw bytes stored
-in a DAG node. It outputs to stdout, and <key> is a base58 encoded multihash.
+'ipfs object data' is a deprecated plumbing command for retrieving the raw
+bytes stored in a dag-pb node. It outputs to stdout, and <key> is a base58
+encoded multihash. Provided for legacy reasons. Use 'ipfs dag get' instead.
 `,
 		LongDescription: `
-'ipfs object data' is a plumbing command for retrieving the raw bytes stored
-in a DAG node. It outputs to stdout, and <key> is a base58 encoded multihash.
+'ipfs object data' is a deprecated plumbing command for retrieving the raw
+bytes stored in a dag-pb node. It outputs to stdout, and <key> is a base58
+encoded multihash. Provided for legacy reasons. Use 'ipfs dag get' instead.
 
 Note that the "--encoding" option does not affect the output, since the output
 is the raw data of the object.
@@ -105,17 +108,18 @@ is the raw data of the object.
 
 // ObjectLinksCmd object links command
 var ObjectLinksCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7936
 	Helptext: cmds.HelpText{
-		Tagline: "Output the links pointed to by the specified object.",
+		Tagline: "Deprecated way to output links in the specified dag-pb object: use 'dag get' instead.",
 		ShortDescription: `
 'ipfs object links' is a plumbing command for retrieving the links from
-a DAG node. It outputs to stdout, and <key> is a base58 encoded
-multihash.
+a dag-pb node. It outputs to stdout, and <key> is a base58 encoded
+multihash. Provided for legacy reasons. Use 'ipfs dag get' instead.
 `,
 	},
 
 	Arguments: []cmds.Argument{
-		cmds.StringArg("key", true, false, "Key of the object to retrieve, in base58-encoded multihash format.").EnableStdin(),
+		cmds.StringArg("key", true, false, "Key of the dag-pb object to retrieve, in base58-encoded multihash format.").EnableStdin(),
 	},
 	Options: []cmds.Option{
 		cmds.BoolOption(headersOptionName, "v", "Print table headers (Hash, Size, Name)."),
@@ -167,7 +171,7 @@ multihash.
 				fmt.Fprintln(tw, "Hash\tSize\tName")
 			}
 			for _, link := range out.Links {
-				fmt.Fprintf(tw, "%s\t%v\t%s\n", link.Hash, link.Size, link.Name)
+				fmt.Fprintf(tw, "%s\t%v\t%s\n", link.Hash, link.Size, cmdenv.EscNonPrint(link.Name))
 			}
 			tw.Flush()
 
@@ -179,35 +183,20 @@ multihash.
 
 // ObjectGetCmd object get command
 var ObjectGetCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7936
 	Helptext: cmds.HelpText{
-		Tagline: "Get and serialize the DAG node named by <key>.",
+		Tagline: "Deprecated way to get and serialize the dag-pb node. Use 'dag get' instead",
 		ShortDescription: `
-'ipfs object get' is a plumbing command for retrieving DAG nodes.
-It serializes the DAG node to the format specified by the "--encoding"
-flag. It outputs to stdout, and <key> is a base58 encoded multihash.
-`,
-		LongDescription: `
-'ipfs object get' is a plumbing command for retrieving DAG nodes.
+'ipfs object get' is a plumbing command for retrieving dag-pb nodes.
 It serializes the DAG node to the format specified by the "--encoding"
 flag. It outputs to stdout, and <key> is a base58 encoded multihash.
 
-This command outputs data in the following encodings:
-  * "protobuf"
-  * "json"
-  * "xml"
-(Specified by the "--encoding" or "--enc" flag)
-
-The encoding of the object's data field can be specified by using the
---data-encoding flag
-
-Supported values are:
-	* "text" (default)
-	* "base64"
+DEPRECATED and provided for legacy reasons. Use 'ipfs dag get' instead.
 `,
 	},
 
 	Arguments: []cmds.Argument{
-		cmds.StringArg("key", true, false, "Key of the object to retrieve, in base58-encoded multihash format.").EnableStdin(),
+		cmds.StringArg("key", true, false, "Key of the dag-pb object to retrieve, in base58-encoded multihash format.").EnableStdin(),
 	},
 	Options: []cmds.Option{
 		cmds.StringOption(encodingOptionName, "Encoding type of the data field, either \"text\" or \"base64\".").WithDefault("text"),
@@ -240,7 +229,7 @@ Supported values are:
 			return err
 		}
 
-		data, err := ioutil.ReadAll(r)
+		data, err := io.ReadAll(r)
 		if err != nil {
 			return err
 		}
@@ -286,10 +275,17 @@ Supported values are:
 
 // ObjectStatCmd object stat command
 var ObjectStatCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7936
 	Helptext: cmds.HelpText{
-		Tagline: "Get stats for the DAG node named by <key>.",
+		Tagline: "Deprecated way to read stats for the dag-pb node. Use 'files stat' instead.",
 		ShortDescription: `
-'ipfs object stat' is a plumbing command to print DAG node statistics.
+'ipfs object stat' is a plumbing command to print dag-pb node statistics.
+<key> is a base58 encoded multihash.
+
+DEPRECATED: modern replacements are 'files stat' and 'dag stat'
+`,
+		LongDescription: `
+'ipfs object stat' is a plumbing command to print dag-pb node statistics.
 <key> is a base58 encoded multihash. It outputs to stdout:
 
 	NumLinks        int number of links in link table
@@ -297,6 +293,26 @@ var ObjectStatCmd = &cmds.Command{
 	LinksSize       int size of the links segment
 	DataSize        int size of the data segment
 	CumulativeSize  int cumulative size of object and its references
+
+DEPRECATED: Provided for legacy reasons. Modern replacements:
+
+  For unixfs, 'ipfs files stat' can be used:
+
+    $ ipfs files stat --with-local /ipfs/QmWfVY9y3xjsixTgbd9AorQxH7VtMpzfx2HaWtsoUYecaX
+	QmWfVY9y3xjsixTgbd9AorQxH7VtMpzfx2HaWtsoUYecaX
+	Size: 5
+	CumulativeSize: 13
+	ChildBlocks: 0
+	Type: file
+	Local: 13 B of 13 B (100.00%)
+
+  Reported sizes are based on metadata present in root block, and should not be
+  trusted.  A slower, but more secure alternative is 'ipfs dag stat', which
+  will work for every DAG type.  It comes with a benefit of calculating the
+  size by walking the DAG:
+
+	$ ipfs dag stat /ipfs/QmWfVY9y3xjsixTgbd9AorQxH7VtMpzfx2HaWtsoUYecaX
+	Size: 13, NumBlocks: 1
 `,
 	},
 
@@ -359,45 +375,19 @@ var ObjectStatCmd = &cmds.Command{
 
 // ObjectPutCmd object put command
 var ObjectPutCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7936
 	Helptext: cmds.HelpText{
-		Tagline: "Store input as a DAG object, print its key.",
+		Tagline: "Deprecated way to store input as a DAG object. Use 'dag put' instead.",
 		ShortDescription: `
-'ipfs object put' is a plumbing command for storing DAG nodes.
-It reads from stdin, and the output is a base58 encoded multihash.
-`,
-		LongDescription: `
-'ipfs object put' is a plumbing command for storing DAG nodes.
+'ipfs object put' is a plumbing command for storing dag-pb nodes.
 It reads from stdin, and the output is a base58 encoded multihash.
 
-Data should be in the format specified by the --inputenc flag.
---inputenc may be one of the following:
-	* "protobuf"
-	* "json" (default)
-
-Examples:
-
-	$ echo '{ "Data": "abc" }' | ipfs object put
-
-This creates a node with the data 'abc' and no links. For an object with
-links, create a file named 'node.json' with the contents:
-
-    {
-        "Data": "another",
-        "Links": [ {
-            "Name": "some link",
-            "Hash": "QmXg9Pp2ytZ14xgmQjYEiHjVjMFXzCVVEcRTWJBmLgR39V",
-            "Size": 8
-        } ]
-    }
-
-And then run:
-
-	$ ipfs object put node.json
+DEPRECATED and provided for legacy reasons. Use 'ipfs dag put' instead.
 `,
 	},
 
 	Arguments: []cmds.Argument{
-		cmds.FileArg("data", true, false, "Data to be stored as a DAG object.").EnableStdin(),
+		cmds.FileArg("data", true, false, "Data to be stored as a dag-pb object.").EnableStdin(),
 	},
 	Options: []cmds.Option{
 		cmds.StringOption(inputencOptionName, "Encoding type of input data. One of: {\"protobuf\", \"json\"}.").WithDefault("json"),
@@ -465,19 +455,23 @@ And then run:
 
 // ObjectNewCmd object new command
 var ObjectNewCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7936
 	Helptext: cmds.HelpText{
-		Tagline: "Create a new object from an ipfs template.",
+		Tagline: "Deprecated way to create a new dag-pb object from a template.",
 		ShortDescription: `
-'ipfs object new' is a plumbing command for creating new DAG nodes.
+'ipfs object new' is a plumbing command for creating new dag-pb nodes.
+DEPRECATED and provided for legacy reasons. Use 'dag put' and 'files' instead.
 `,
 		LongDescription: `
-'ipfs object new' is a plumbing command for creating new DAG nodes.
+'ipfs object new' is a plumbing command for creating new dag-pb nodes.
 By default it creates and returns a new empty merkledag node, but
 you may pass an optional template argument to create a preformatted
 node.
 
 Available templates:
 	* unixfs-dir
+
+DEPRECATED and provided for legacy reasons. Use 'dag put' and 'files' instead.
 `,
 	},
 	Arguments: []cmds.Argument{

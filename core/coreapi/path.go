@@ -5,13 +5,17 @@ import (
 	"fmt"
 	gopath "path"
 
-	"github.com/ipfs/go-ipfs/namesys/resolve"
+	"github.com/ipfs/go-namesys/resolve"
+	"github.com/ipfs/kubo/tracing"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ipfs/go-cid"
+	"github.com/ipfs/go-fetcher"
 	ipld "github.com/ipfs/go-ipld-format"
 	ipfspath "github.com/ipfs/go-path"
-	"github.com/ipfs/go-path/resolver"
-	uio "github.com/ipfs/go-unixfs/io"
+	ipfspathresolver "github.com/ipfs/go-path/resolver"
 	coreiface "github.com/ipfs/interface-go-ipfs-core"
 	path "github.com/ipfs/interface-go-ipfs-core/path"
 )
@@ -19,6 +23,9 @@ import (
 // ResolveNode resolves the path `p` using Unixfs resolver, gets and returns the
 // resolved Node.
 func (api *CoreAPI) ResolveNode(ctx context.Context, p path.Path) (ipld.Node, error) {
+	ctx, span := tracing.Span(ctx, "CoreAPI", "ResolveNode", trace.WithAttributes(attribute.String("path", p.String())))
+	defer span.End()
+
 	rp, err := api.ResolvePath(ctx, p)
 	if err != nil {
 		return nil, err
@@ -34,6 +41,9 @@ func (api *CoreAPI) ResolveNode(ctx context.Context, p path.Path) (ipld.Node, er
 // ResolvePath resolves the path `p` using Unixfs resolver, returns the
 // resolved path.
 func (api *CoreAPI) ResolvePath(ctx context.Context, p path.Path) (path.Resolved, error) {
+	ctx, span := tracing.Span(ctx, "CoreAPI", "ResolvePath", trace.WithAttributes(attribute.String("path", p.String())))
+	defer span.End()
+
 	if _, ok := p.(path.Resolved); ok {
 		return p.(path.Resolved), nil
 	}
@@ -49,23 +59,19 @@ func (api *CoreAPI) ResolvePath(ctx context.Context, p path.Path) (path.Resolved
 		return nil, err
 	}
 
-	var resolveOnce resolver.ResolveOnce
-
-	switch ipath.Segments()[0] {
-	case "ipfs":
-		resolveOnce = uio.ResolveUnixfsOnce
-	case "ipld":
-		resolveOnce = resolver.ResolveSingle
-	default:
+	if ipath.Segments()[0] != "ipfs" && ipath.Segments()[0] != "ipld" {
 		return nil, fmt.Errorf("unsupported path namespace: %s", p.Namespace())
 	}
 
-	r := &resolver.Resolver{
-		DAG:         api.dag,
-		ResolveOnce: resolveOnce,
+	var dataFetcher fetcher.Factory
+	if ipath.Segments()[0] == "ipld" {
+		dataFetcher = api.ipldFetcherFactory
+	} else {
+		dataFetcher = api.unixFSFetcherFactory
 	}
+	resolver := ipfspathresolver.NewBasicResolver(dataFetcher)
 
-	node, rest, err := r.ResolveToLastNode(ctx, ipath)
+	node, rest, err := resolver.ResolveToLastNode(ctx, ipath)
 	if err != nil {
 		return nil, err
 	}

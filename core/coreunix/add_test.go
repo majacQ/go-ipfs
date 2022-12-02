@@ -4,16 +4,15 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/ipfs/go-ipfs/core"
-	"github.com/ipfs/go-ipfs/gc"
-	"github.com/ipfs/go-ipfs/repo"
+	"github.com/ipfs/kubo/core"
+	"github.com/ipfs/kubo/gc"
+	"github.com/ipfs/kubo/repo"
 
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-blockservice"
@@ -21,11 +20,11 @@ import (
 	"github.com/ipfs/go-datastore"
 	syncds "github.com/ipfs/go-datastore/sync"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
-	config "github.com/ipfs/go-ipfs-config"
 	files "github.com/ipfs/go-ipfs-files"
 	pi "github.com/ipfs/go-ipfs-posinfo"
 	dag "github.com/ipfs/go-merkledag"
 	coreiface "github.com/ipfs/interface-go-ipfs-core"
+	config "github.com/ipfs/kubo/config"
 )
 
 const testPeerID = "QmTFauExutTsy4XP6JbMFcw2Wa9645HJt2bTqL6qYDCKfe"
@@ -68,7 +67,7 @@ func TestAddMultipleGCLive(t *testing.T) {
 
 	go func() {
 		defer close(out)
-		_, _ = adder.AddAllAndPin(slf)
+		_, _ = adder.AddAllAndPin(context.Background(), slf)
 		// Ignore errors for clarity - the real bug would be gc'ing files while adding them, not this resultant error
 	}()
 
@@ -179,7 +178,7 @@ func TestAddGCLive(t *testing.T) {
 	go func() {
 		defer close(addDone)
 		defer close(out)
-		_, err := adder.AddAllAndPin(slf)
+		_, err := adder.AddAllAndPin(context.Background(), slf)
 
 		if err != nil {
 			t.Error(err)
@@ -282,13 +281,13 @@ func testAddWPosInfo(t *testing.T, rawLeaves bool) {
 
 	data := make([]byte, 5*1024*1024)
 	rand.New(rand.NewSource(2)).Read(data) // Rand.Read never returns an error
-	fileData := ioutil.NopCloser(bytes.NewBuffer(data))
+	fileData := io.NopCloser(bytes.NewBuffer(data))
 	fileInfo := dummyFileInfo{"foo.txt", int64(len(data)), time.Now()}
 	file, _ := files.NewReaderPathFile(filepath.Join(os.TempDir(), "foo.txt"), fileData, &fileInfo)
 
 	go func() {
 		defer close(adder.Out)
-		_, err = adder.AddAllAndPin(file)
+		_, err = adder.AddAllAndPin(context.Background(), file)
 		if err != nil {
 			t.Error(err)
 		}
@@ -327,16 +326,16 @@ type testBlockstore struct {
 	countAtOffsetNonZero int
 }
 
-func (bs *testBlockstore) Put(block blocks.Block) error {
+func (bs *testBlockstore) Put(ctx context.Context, block blocks.Block) error {
 	bs.CheckForPosInfo(block)
-	return bs.GCBlockstore.Put(block)
+	return bs.GCBlockstore.Put(ctx, block)
 }
 
-func (bs *testBlockstore) PutMany(blocks []blocks.Block) error {
+func (bs *testBlockstore) PutMany(ctx context.Context, blocks []blocks.Block) error {
 	for _, blk := range blocks {
 		bs.CheckForPosInfo(blk)
 	}
-	return bs.GCBlockstore.PutMany(blocks)
+	return bs.GCBlockstore.PutMany(ctx, blocks)
 }
 
 func (bs *testBlockstore) CheckForPosInfo(block blocks.Block) {

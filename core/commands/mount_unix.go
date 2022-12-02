@@ -1,3 +1,4 @@
+//go:build !windows && !nofuse
 // +build !windows,!nofuse
 
 package commands
@@ -6,11 +7,12 @@ import (
 	"fmt"
 	"io"
 
-	cmdenv "github.com/ipfs/go-ipfs/core/commands/cmdenv"
-	nodeMount "github.com/ipfs/go-ipfs/fuse/node"
+	oldcmds "github.com/ipfs/kubo/commands"
+	cmdenv "github.com/ipfs/kubo/core/commands/cmdenv"
+	nodeMount "github.com/ipfs/kubo/fuse/node"
 
 	cmds "github.com/ipfs/go-ipfs-cmds"
-	config "github.com/ipfs/go-ipfs-config"
+	config "github.com/ipfs/kubo/config"
 )
 
 const (
@@ -19,6 +21,7 @@ const (
 )
 
 var MountCmd = &cmds.Command{
+	Status: cmds.Experimental,
 	Helptext: cmds.HelpText{
 		Tagline: "Mounts IPFS to the filesystem (read-only).",
 		ShortDescription: `
@@ -80,7 +83,7 @@ baz
 		cmds.StringOption(mountIPNSPathOptionName, "n", "The path where IPNS should be mounted."),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
-		cfg, err := cmdenv.GetConfig(env)
+		cfg, err := env.(*oldcmds.Context).GetConfig()
 		if err != nil {
 			return err
 		}
@@ -119,8 +122,8 @@ baz
 	Type: config.Mounts{},
 	Encoders: cmds.EncoderMap{
 		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, mounts *config.Mounts) error {
-			fmt.Fprintf(w, "IPFS mounted at: %s\n", mounts.IPFS)
-			fmt.Fprintf(w, "IPNS mounted at: %s\n", mounts.IPNS)
+			fmt.Fprintf(w, "IPFS mounted at: %s\n", cmdenv.EscNonPrint(mounts.IPFS))
+			fmt.Fprintf(w, "IPNS mounted at: %s\n", cmdenv.EscNonPrint(mounts.IPNS))
 
 			return nil
 		}),

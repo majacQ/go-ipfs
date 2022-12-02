@@ -1,14 +1,14 @@
-# Experimental features of go-ipfs
+# Experimental features of Kubo
 
-This document contains a list of experimental features in go-ipfs.
+This document contains a list of experimental features in Kubo.
 These features, commands, and APIs aren't mature, and you shouldn't rely on them.
 Once they reach maturity, there's going to be mention in the changelog and
 release posts. If they don't reach maturity, the same applies, and their code is
 removed.
 
-Subscribe to https://github.com/ipfs/go-ipfs/issues/3397 to get updates.
+Subscribe to https://github.com/ipfs/kubo/issues/3397 to get updates.
 
-When you add a new experimental feature to go-ipfs or change an experimental
+When you add a new experimental feature to kubo or change an experimental
 feature, you MUST please make a PR updating this document, and link the PR in
 the above issue.
 
@@ -19,6 +19,7 @@ the above issue.
 - [Private Networks](#private-networks)
 - [ipfs p2p](#ipfs-p2p)
 - [p2p http proxy](#p2p-http-proxy)
+- [FUSE](#fuse)
 - [Plugins](#plugins)
 - [Directory Sharding / HAMT](#directory-sharding--hamt)
 - [IPNS PubSub](#ipns-pubsub)
@@ -26,6 +27,7 @@ the above issue.
 - [Strategic Providing](#strategic-providing)
 - [Graphsync](#graphsync)
 - [Noise](#noise)
+- [Accelerated DHT Client](#accelerated-dht-client)
 
 ---
 
@@ -37,14 +39,22 @@ Candidate, disabled by default but will be enabled by default in 0.6.0.
 
 ### In Version
 
-0.4.5
+0.4.5 (`--enable-pubsub-experiment`)
+0.11.0 (`Pubsub.Enabled` flag in config)
 
 ### How to enable
 
-run your daemon with the `--enable-pubsub-experiment` flag. Then use the
-`ipfs pubsub` commands.
+Run your daemon with the `--enable-pubsub-experiment` flag
+or modify your ipfs config and restart the daemon:
+```
+ipfs config --json Pubsub.Enabled true
+```
 
-Configuration documentation can be found in [./config.md]()
+Then use the `ipfs pubsub` commands.
+
+NOTE: `--enable-pubsub-experiment` CLI flag overrides `Pubsub.Enabled` config.
+
+Configuration documentation can be found in [kubo/docs/config.md](./config.md#pubsub)
 
 ### Road to being a real feature
 
@@ -377,6 +387,15 @@ We also support the use of protocol names of the form /x/$NAME/http where $NAME 
 - [ ] More documentation
 - [ ] Need better integration with the subdomain gateway feature.
 
+## FUSE
+
+FUSE makes it possible to mount `/ipfs` and `/ipns` namespaces in your OS,
+allowing argitrary apps access to IPFS using a subset of filesystem abstractions.
+
+It is considered  EXPERIMENTAL due to limited (and buggy) support on some platforms.
+
+See [fuse.md](./fuse.md) for more details.
+
 ## Plugins
 
 ### In Version
@@ -401,27 +420,22 @@ See [Plugin docs](./plugins.md)
 ## Directory Sharding / HAMT
 
 ### In Version
-0.4.8
+
+- 0.4.8:
+  - Introduced `Experimental.ShardingEnabled` which enabled sharding globally.
+  - All-or-nothing, unnecessary sharding of small directories.
+
+- 0.11.0 :
+  - Removed support for `Experimental.ShardingEnabled`
+  - Replaced with automatic sharding based on the block size
 
 ### State
-Experimental
 
-Allows creating directories with an unlimited number of entries.
+Replaced by autosharding.
 
-**Caveats:**
-1. right now it is a GLOBAL FLAG which will impact the final CID of all directories produced by `ipfs.add` (even the small ones)
-2. currently size of unixfs directories is limited by the maximum block size
+The `Experimental.ShardingEnabled` config field is no longer used, please remove it from your configs.
 
-### Basic Usage:
-
-```
-ipfs config --json Experimental.ShardingEnabled true
-```
-
-### Road to being a real feature
-
-- [ ] Make sure that objects that don't have to be sharded aren't
-- [ ] Generalize sharding and define a new layer between IPLD and IPFS
+kubo now automatically shards when directory block is bigger than 256KB, ensuring every block is small enough to be exchanged with other peers
 
 ## IPNS pubsub
 
@@ -430,11 +444,14 @@ ipfs config --json Experimental.ShardingEnabled true
 0.4.14 :
   - Introduced
 
-0.5.0 : 
+0.5.0 :
    - No longer needs to use the DHT for the first resolution
    - When discovering PubSub peers via the DHT, the DHT key is different from previous versions
       - This leads to 0.5 IPNS pubsub peers and 0.4 IPNS pubsub peers not being able to find each other in the DHT
    - Robustness improvements
+
+0.11.0 :
+  - Can be enabled via `Ipns.UsePubsub` flag in config
 
 ### State
 
@@ -456,7 +473,15 @@ Users interested in this feature should upgrade to at least 0.5.0
 
 ### How to enable
 
-run your daemon with the `--enable-namesys-pubsub` flag; enables pubsub.
+Run your daemon with the `--enable-namesys-pubsub` flag
+or modify your ipfs config and restart the daemon:
+```
+ipfs config --json Ipns.UsePubsub true
+```
+
+NOTE:
+- This feature implicitly enables [ipfs pubsub](#ipfs-pubsub).
+- Passing `--enable-namesys-pubsub` CLI flag overrides `Ipns.UsePubsub` config.
 
 ### Road to being a real feature
 
@@ -467,7 +492,11 @@ run your daemon with the `--enable-namesys-pubsub` flag; enables pubsub.
 
 ### In Version
 
-0.4.19
+- 0.4.19 :
+  - Introduced Circuit Relay v1
+- 0.11.0 :
+  - Deprecated v1
+  - Introduced [Circuit Relay v2](https://github.com/libp2p/specs/blob/master/relay/circuit-v2.md)
 
 ### State
 
@@ -480,15 +509,14 @@ Automatically discovers relays and advertises relay addresses when the node is b
 Modify your ipfs config:
 
 ```
-ipfs config --json Swarm.EnableRelayHop false
-ipfs config --json Swarm.EnableAutoRelay true
+ipfs config --json Swarm.RelayClient.Enabled true
 ```
-
-NOTE: Ensuring `Swarm.EnableRelayHop` is _false_ is extremely important here. If you set it to true, you will _act_ as a public relay for the rest of the network instead of _using_ the public relays.
 
 ### Road to being a real feature
 
 - [ ] needs testing
+- [ ] needs to be automatically enabled when AutoNAT detects node is behind an impenetrable NAT.
+
 
 ## Strategic Providing
 
@@ -496,7 +524,7 @@ NOTE: Ensuring `Swarm.EnableRelayHop` is _false_ is extremely important here. If
 
 Experimental, disabled by default.
 
-Replaces the existing provide mechanism with a robust, strategic provider system.
+Replaces the existing provide mechanism with a robust, strategic provider system. Currently enabling this option will provide nothing.
 
 ### How to enable
 
@@ -544,21 +572,59 @@ ipfs config --json Experimental.GraphsyncEnabled true
 
 ### State
 
-Experimental, enabled by default
+Stable, enabled by default
 
-[Noise](https://github.com/libp2p/specs/tree/master/noise) libp2p transport based on the [Noise Protocol Framework](https://noiseprotocol.org/noise.html). While TLS remains the default transport in go-ipfs, Noise is easier to implement and will thus serve as the "interop" transport between IPFS and libp2p implementations, eventually replacing SECIO.
+[Noise](https://github.com/libp2p/specs/tree/master/noise) libp2p transport based on the [Noise Protocol Framework](https://noiseprotocol.org/noise.html). While TLS remains the default transport in Kubo, Noise is easier to implement and is thus the "interop" transport between IPFS and libp2p implementations.
+
+## Accelerated DHT Client
+
+### In Version
+
+0.9.0
+
+### State
+
+Experimental, default-disabled.
+
+Utilizes an alternative DHT client that searches for and maintains more information about the network
+in exchange for being more performant.
+
+When it is enabled:
+- DHT operations should complete much faster than with it disabled
+- A batching reprovider system will be enabled which takes advantage of some properties of the experimental client to
+  very efficiently put provider records into the network
+- The standard DHT client (and server if enabled) are run alongside the alternative client
+- The operations `ipfs stats dht` and `ipfs stats provide` will have different outputs
+   - `ipfs stats provide` only works when the accelerated DHT client is enabled and shows various statistics regarding
+     the provider/reprovider system
+   - `ipfs stats dht` will default to showing information about the new client
+
+**Caveats:**
+1. Running the experimental client likely will result in more resource consumption (connections, RAM, CPU, bandwidth)
+   - Users that are limited in the number of parallel connections their machines/networks can perform will likely suffer
+   - Currently, the resource usage is not smooth as the client crawls the network in rounds and reproviding is similarly
+     done in rounds
+   - Users who previously had a lot of content but were unable to advertise it on the network will see an increase in
+     egress bandwidth as their nodes start to advertise all of their CIDs into the network. If you have lots of data
+     entering your node that you don't want to advertise consider using [Reprovider Strategies](config.md#reproviderstrategy)
+     to reduce the number of CIDs that you are reproviding. Similarly, if you are running a node that deals mostly with
+     short-lived temporary data (e.g. you use a separate node for ingesting data then for storing and serving it) then
+     you may benefit from using [Strategic Providing](#strategic-providing) to prevent advertising of data that you
+     ultimately will not have.
+2. Currently, the DHT is not usable for queries for the first 5-10 minutes of operation as the routing table is being
+prepared. This means operations like searching the DHT for particular peers or content will not work
+   - You can see if the DHT has been initially populated by running `ipfs stats dht`
+3. Currently, the accelerated DHT client is not compatible with LAN-based DHTs and will not perform operations against
+them
 
 ### How to enable
 
-While the Noise transport is now shipped and enabled by default in go-ipfs, it won't be used by default for most connections because TLS and SECIO are currently preferred. If you'd like to test out the Noise transport, you can use the `Experimental.OverrideSecurityTransports` option to enable, disable, and reorder security transports.
-
-For example, to prefer noise over TLS and disable SECIO, run:
-
 ```
-ipfs config --json Experimental.OverrideSecurityTransports '["noise", "tls"]'
+ipfs config --json Experimental.AcceleratedDHTClient true
 ```
 
 ### Road to being a real feature
 
-- [ ] Needs real-world testing.
-- [ ] Ideally a js-ipfs and a rust-ipfs release would include support for Noise.
+- [ ] Needs more people to use and report on how well it works
+- [ ] Should be usable for queries (even if slower/less efficient) shortly after startup
+- [ ] Should be usable with non-WAN DHTs

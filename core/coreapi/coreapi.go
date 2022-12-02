@@ -19,32 +19,31 @@ import (
 	"fmt"
 
 	bserv "github.com/ipfs/go-blockservice"
-	"github.com/ipfs/go-ipfs-blockstore"
-	"github.com/ipfs/go-ipfs-exchange-interface"
+	"github.com/ipfs/go-fetcher"
+	blockstore "github.com/ipfs/go-ipfs-blockstore"
+	exchange "github.com/ipfs/go-ipfs-exchange-interface"
 	offlinexch "github.com/ipfs/go-ipfs-exchange-offline"
-	"github.com/ipfs/go-ipfs-pinner"
-	"github.com/ipfs/go-ipfs-provider"
+	pin "github.com/ipfs/go-ipfs-pinner"
+	provider "github.com/ipfs/go-ipfs-provider"
 	offlineroute "github.com/ipfs/go-ipfs-routing/offline"
 	ipld "github.com/ipfs/go-ipld-format"
-	logging "github.com/ipfs/go-log"
 	dag "github.com/ipfs/go-merkledag"
 	coreiface "github.com/ipfs/interface-go-ipfs-core"
 	"github.com/ipfs/interface-go-ipfs-core/options"
-	ci "github.com/libp2p/go-libp2p-core/crypto"
-	p2phost "github.com/libp2p/go-libp2p-core/host"
-	peer "github.com/libp2p/go-libp2p-core/peer"
-	pstore "github.com/libp2p/go-libp2p-core/peerstore"
-	routing "github.com/libp2p/go-libp2p-core/routing"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	record "github.com/libp2p/go-libp2p-record"
+	ci "github.com/libp2p/go-libp2p/core/crypto"
+	p2phost "github.com/libp2p/go-libp2p/core/host"
+	peer "github.com/libp2p/go-libp2p/core/peer"
+	pstore "github.com/libp2p/go-libp2p/core/peerstore"
+	routing "github.com/libp2p/go-libp2p/core/routing"
+	madns "github.com/multiformats/go-multiaddr-dns"
 
-	"github.com/ipfs/go-ipfs/core"
-	"github.com/ipfs/go-ipfs/core/node"
-	"github.com/ipfs/go-ipfs/namesys"
-	"github.com/ipfs/go-ipfs/repo"
+	"github.com/ipfs/go-namesys"
+	"github.com/ipfs/kubo/core"
+	"github.com/ipfs/kubo/core/node"
+	"github.com/ipfs/kubo/repo"
 )
-
-var log = logging.Logger("core/coreapi")
 
 type CoreAPI struct {
 	nctx context.Context
@@ -57,16 +56,18 @@ type CoreAPI struct {
 	baseBlocks blockstore.Blockstore
 	pinning    pin.Pinner
 
-	blocks bserv.BlockService
-	dag    ipld.DAGService
+	blocks               bserv.BlockService
+	dag                  ipld.DAGService
+	ipldFetcherFactory   fetcher.Factory
+	unixFSFetcherFactory fetcher.Factory
+	peerstore            pstore.Peerstore
+	peerHost             p2phost.Host
+	recordValidator      record.Validator
+	exchange             exchange.Interface
 
-	peerstore       pstore.Peerstore
-	peerHost        p2phost.Host
-	recordValidator record.Validator
-	exchange        exchange.Interface
-
-	namesys namesys.NameSystem
-	routing routing.Routing
+	namesys     namesys.NameSystem
+	routing     routing.Routing
+	dnsResolver *madns.Resolver
 
 	provider provider.System
 
@@ -157,7 +158,7 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 
 	n := api.nd
 
-	subApi := &CoreAPI{
+	subAPI := &CoreAPI{
 		nctx: n.Context(),
 
 		identity:   n.Identity,
@@ -168,8 +169,10 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 		baseBlocks: n.BaseBlocks,
 		pinning:    n.Pinning,
 
-		blocks: n.Blocks,
-		dag:    n.DAG,
+		blocks:               n.Blocks,
+		dag:                  n.DAG,
+		ipldFetcherFactory:   n.IPLDFetcherFactory,
+		unixFSFetcherFactory: n.UnixFSFetcherFactory,
 
 		peerstore:       n.Peerstore,
 		peerHost:        n.PeerHost,
@@ -177,6 +180,7 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 		recordValidator: n.RecordValidator,
 		exchange:        n.Exchange,
 		routing:         n.Routing,
+		dnsResolver:     n.DNSResolver,
 
 		provider: n.Provider,
 
@@ -186,14 +190,14 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 		parentOpts: settings,
 	}
 
-	subApi.checkOnline = func(allowOffline bool) error {
+	subAPI.checkOnline = func(allowOffline bool) error {
 		if !n.IsOnline && !allowOffline {
 			return coreiface.ErrOffline
 		}
 		return nil
 	}
 
-	subApi.checkPublishAllowed = func() error {
+	subAPI.checkPublishAllowed = func() error {
 		if n.Mounts.Ipns != nil && n.Mounts.Ipns.IsActive() {
 			return errors.New("cannot manually publish while IPNS is mounted")
 		}
@@ -214,31 +218,39 @@ func (api *CoreAPI) WithOptions(opts ...options.ApiOption) (coreiface.CoreAPI, e
 			return nil, fmt.Errorf("cannot specify negative resolve cache size")
 		}
 
-		subApi.routing = offlineroute.NewOfflineRouter(subApi.repo.Datastore(), subApi.recordValidator)
-		subApi.namesys = namesys.NewNameSystem(subApi.routing, subApi.repo.Datastore(), cs)
-		subApi.provider = provider.NewOfflineProvider()
+		subAPI.routing = offlineroute.NewOfflineRouter(subAPI.repo.Datastore(), subAPI.recordValidator)
 
-		subApi.peerstore = nil
-		subApi.peerHost = nil
-		subApi.recordValidator = nil
+		subAPI.namesys, err = namesys.NewNameSystem(subAPI.routing,
+			namesys.WithDatastore(subAPI.repo.Datastore()),
+			namesys.WithDNSResolver(subAPI.dnsResolver),
+			namesys.WithCache(cs))
+		if err != nil {
+			return nil, fmt.Errorf("error constructing namesys: %w", err)
+		}
+
+		subAPI.provider = provider.NewOfflineProvider()
+
+		subAPI.peerstore = nil
+		subAPI.peerHost = nil
+		subAPI.recordValidator = nil
 	}
 
 	if settings.Offline || !settings.FetchBlocks {
-		subApi.exchange = offlinexch.Exchange(subApi.blockstore)
-		subApi.blocks = bserv.New(subApi.blockstore, subApi.exchange)
-		subApi.dag = dag.NewDAGService(subApi.blocks)
+		subAPI.exchange = offlinexch.Exchange(subAPI.blockstore)
+		subAPI.blocks = bserv.New(subAPI.blockstore, subAPI.exchange)
+		subAPI.dag = dag.NewDAGService(subAPI.blocks)
 	}
 
-	return subApi, nil
+	return subAPI, nil
 }
 
 // getSession returns new api backed by the same node with a read-only session DAG
 func (api *CoreAPI) getSession(ctx context.Context) *CoreAPI {
-	sesApi := *api
+	sesAPI := *api
 
 	// TODO: We could also apply this to api.blocks, and compose into writable api,
 	// but this requires some changes in blockservice/merkledag
-	sesApi.dag = dag.NewReadOnlyDagService(dag.NewSession(ctx, api.dag))
+	sesAPI.dag = dag.NewReadOnlyDagService(dag.NewSession(ctx, api.dag))
 
-	return &sesApi
+	return &sesAPI
 }

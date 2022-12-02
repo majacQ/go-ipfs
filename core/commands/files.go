@@ -10,10 +10,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ipfs/go-ipfs/core"
-	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
+	humanize "github.com/dustin/go-humanize"
+	"github.com/ipfs/kubo/core"
+	"github.com/ipfs/kubo/core/commands/cmdenv"
 
-	"github.com/dustin/go-humanize"
 	bservice "github.com/ipfs/go-blockservice"
 	cid "github.com/ipfs/go-cid"
 	cidenc "github.com/ipfs/go-cidutil/cidenc"
@@ -22,7 +22,7 @@ import (
 	ipld "github.com/ipfs/go-ipld-format"
 	logging "github.com/ipfs/go-log"
 	dag "github.com/ipfs/go-merkledag"
-	"github.com/ipfs/go-mfs"
+	mfs "github.com/ipfs/go-mfs"
 	ft "github.com/ipfs/go-unixfs"
 	iface "github.com/ipfs/interface-go-ipfs-core"
 	path "github.com/ipfs/interface-go-ipfs-core/path"
@@ -43,16 +43,17 @@ The files facility interacts with MFS (Mutable File System). MFS acts as a
 single, dynamic filesystem mount. MFS has a root CID that is transparently
 updated when a change happens (and can be checked with "ipfs files stat /").
 
-All files and folders within MFS are respected and will not be cleaned up
-during garbage collections. MFS is independent from the list of pinned items
-("ipfs pin ls"). Calls to "ipfs pin add" and "ipfs pin rm" will add and remove
-pins independently of MFS. If MFS content that was
-additionally pinned is removed by calling "ipfs files rm", it will still
-remain pinned.
+All files and folders within MFS are respected and will not be deleted
+during garbage collections. However, a DAG may be referenced in MFS without
+being fully available locally (MFS content is lazy loaded when accessed).
+MFS is independent from the list of pinned items ("ipfs pin ls"). Calls to
+"ipfs pin add" and "ipfs pin rm" will add and remove pins independently of
+MFS. If MFS content that was additionally pinned is removed by calling
+"ipfs files rm", it will still remain pinned.
 
 Content added with "ipfs add" (which by default also becomes pinned), is not
-added to MFS. Any content can be put into MFS with the command "ipfs files cp
-/ipfs/<cid> /some/path/".
+added to MFS. Any content can be lazily referenced from MFS with the command
+"ipfs files cp /ipfs/<cid> /some/path/" (see ipfs files cp --help).
 
 
 NOTE:
@@ -296,7 +297,7 @@ func walkBlock(ctx context.Context, dagserv ipld.DAGService, nd ipld.Node) (bool
 	for _, link := range nd.Links() {
 		child, err := dagserv.Get(ctx, link.Cid)
 
-		if err == ipld.ErrNotFound {
+		if ipld.IsNotFound(err) {
 			local = false
 			continue
 		}
@@ -321,11 +322,12 @@ func walkBlock(ctx context.Context, dagserv ipld.DAGService, nd ipld.Node) (bool
 
 var filesCpCmd = &cmds.Command{
 	Helptext: cmds.HelpText{
-		Tagline: "Copy any IPFS files and directories into MFS (or copy within MFS).",
+		Tagline: "Add references to IPFS files and directories in MFS (or copy within MFS).",
 		ShortDescription: `
-"ipfs files cp" can be used to copy any IPFS file or directory (usually in the
-form /ipfs/<CID>, but also any resolvable path), into the Mutable File System
-(MFS).
+"ipfs files cp" can be used to add references to any IPFS file or directory
+(usually in the form /ipfs/<CID>, but also any resolvable path) into MFS.
+This performs a lazy copy: the full DAG will not be fetched, only the root
+node being copied.
 
 It can also be used to copy files within MFS, but in the case when an
 IPFS-path matches an existing MFS path, the IPFS path wins.
@@ -336,15 +338,35 @@ IPFS Content Identifier and then "ipfs files cp" to copy it into MFS:
 $ ipfs add --quieter --pin=false <your file>
 # ...
 # ... outputs the root CID at the end
-$ ipfs cp /ipfs/<CID> /your/desired/mfs/path
+$ ipfs files cp /ipfs/<CID> /your/desired/mfs/path
+
+If you wish to fully copy content from a different IPFS peer into MFS, do not
+forget to force IPFS to fetch to full DAG after doing the "cp" operation. i.e:
+
+$ ipfs files cp /ipfs/<CID> /your/desired/mfs/path
+$ ipfs pin add <CID>
+
+The lazy-copy feature can also be used to protect partial DAG contents from
+garbage collection. i.e. adding the Wikipedia root to MFS would not download
+all the Wikipedia, but will prevent any downloaded Wikipedia-DAG content from
+being GC'ed.
 `,
 	},
 	Arguments: []cmds.Argument{
 		cmds.StringArg("source", true, false, "Source IPFS or MFS path to copy."),
 		cmds.StringArg("dest", true, false, "Destination within MFS."),
 	},
+	Options: []cmds.Option{
+		cmds.BoolOption(filesParentsOptionName, "p", "Make parent directories as needed."),
+	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
+		mkParents, _ := req.Options[filesParentsOptionName].(bool)
 		nd, err := cmdenv.GetNode(env)
+		if err != nil {
+			return err
+		}
+
+		prefix, err := getPrefixNew(req)
 		if err != nil {
 			return err
 		}
@@ -374,6 +396,13 @@ $ ipfs cp /ipfs/<CID> /your/desired/mfs/path
 		node, err := getNodeFromPath(req.Context, nd, api, src)
 		if err != nil {
 			return fmt.Errorf("cp: cannot get node from path %s: %s", src, err)
+		}
+
+		if mkParents {
+			err := ensureContainingDirectoryExists(nd.FilesRoot, dst, prefix)
+			if err != nil {
+				return err
+			}
 		}
 
 		err = mfs.PutNode(nd.FilesRoot, dst, node)
@@ -419,7 +448,7 @@ var filesLsCmd = &cmds.Command{
 	Helptext: cmds.HelpText{
 		Tagline: "List directories in the local mutable namespace.",
 		ShortDescription: `
-List directories in the local mutable namespace.
+List directories in the local mutable namespace (works on both IPFS and MFS paths).
 
 Examples:
 
@@ -552,7 +581,7 @@ const (
 
 var filesReadCmd = &cmds.Command{
 	Helptext: cmds.HelpText{
-		Tagline: "Read a file in a given MFS.",
+		Tagline: "Read a file from MFS.",
 		ShortDescription: `
 Read a specified number of bytes from a file at a given offset. By default,
 it will read the entire file similar to the Unix cat.
@@ -561,7 +590,7 @@ Examples:
 
     $ ipfs files read /test/hello
     hello
-        `,
+	`,
 	},
 
 	Arguments: []cmds.Argument{
@@ -695,11 +724,16 @@ const (
 
 var filesWriteCmd = &cmds.Command{
 	Helptext: cmds.HelpText{
-		Tagline: "Write to a mutable file in a given filesystem.",
+		Tagline: "Append to (modify) a file in MFS.",
 		ShortDescription: `
-Write data to a file in a given filesystem. This command allows you to specify
-a beginning offset to write to. The entire length of the input will be
-written.
+A low-level MFS command that allows you to append data to a file. If you want
+to add a file without modifying an existing one, use 'ipfs add --to-files'
+instead.
+`,
+		LongDescription: `
+A low-level MFS command that allows you to append data at the end of a file, or
+specify a beginning offset within a file to write to. The entire length of the
+input will be written.
 
 If the '--create' option is specified, the file will be created if it does not
 exist. Nonexistent intermediate directories will not be created unless the
@@ -726,6 +760,22 @@ WARNING:
 Usage of the '--flush=false' option does not guarantee data durability until
 the tree has been flushed. This can be accomplished by running 'ipfs files
 stat' on the file or any of its ancestors.
+
+WARNING:
+
+The CID produced by 'files write' will be different from 'ipfs add' because
+'ipfs file write' creates a trickle-dag optimized for append-only operations
+See '--trickle' in 'ipfs add --help' for more information.
+
+If you want to add a file without modifying an existing one,
+use 'ipfs add' with '--to-files':
+
+  > ipfs files mkdir -p /myfs/dir
+  > ipfs add example.jpg --to-files /myfs/dir/
+  > ipfs files ls /myfs/dir/
+  example.jpg
+
+See '--to-files' in 'ipfs add --help' for more information.
 `,
 	},
 	Arguments: []cmds.Argument{
@@ -930,9 +980,9 @@ are run with the '--flush=false'.
 
 var filesChcidCmd = &cmds.Command{
 	Helptext: cmds.HelpText{
-		Tagline: "Change the cid version or hash function of the root node of a given path.",
+		Tagline: "Change the CID version or hash function of the root node of a given path.",
 		ShortDescription: `
-Change the cid version or hash function of the root node of a given path.
+Change the CID version or hash function of the root node of a given path.
 `,
 	},
 	Arguments: []cmds.Argument{
@@ -990,7 +1040,7 @@ func updatePath(rt *mfs.Root, pth string, builder cid.Builder) error {
 
 var filesRmCmd = &cmds.Command{
 	Helptext: cmds.HelpText{
-		Tagline: "Remove a file.",
+		Tagline: "Remove a file from MFS.",
 		ShortDescription: `
 Remove files or directories.
 
@@ -1015,69 +1065,86 @@ Remove files or directories.
 		if err != nil {
 			return err
 		}
-
-		path, err := checkPath(req.Arguments[0])
-		if err != nil {
-			return err
-		}
-
-		if path == "/" {
-			return fmt.Errorf("cannot delete root")
-		}
-
-		// 'rm a/b/c/' will fail unless we trim the slash at the end
-		if path[len(path)-1] == '/' {
-			path = path[:len(path)-1]
-		}
-
 		// if '--force' specified, it will remove anything else,
 		// including file, directory, corrupted node, etc
 		force, _ := req.Options[forceOptionName].(bool)
+		dashr, _ := req.Options[recursiveOptionName].(bool)
+		var errs []error
+		for _, arg := range req.Arguments {
+			path, err := checkPath(arg)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s is not a valid path: %w", arg, err))
+				continue
+			}
 
-		dir, name := gopath.Split(path)
+			if err := removePath(nd.FilesRoot, path, force, dashr); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", path, err))
+			}
+		}
+		if len(errs) > 0 {
+			for _, err = range errs {
+				e := res.Emit(err.Error())
+				if e != nil {
+					return e
+				}
+			}
+			return fmt.Errorf("can't remove some files")
+		}
+		return nil
+	},
+}
 
-		pdir, err := getParentDir(nd.FilesRoot, dir)
+func removePath(filesRoot *mfs.Root, path string, force bool, dashr bool) error {
+	if path == "/" {
+		return fmt.Errorf("cannot delete root")
+	}
+
+	// 'rm a/b/c/' will fail unless we trim the slash at the end
+	if path[len(path)-1] == '/' {
+		path = path[:len(path)-1]
+	}
+
+	dir, name := gopath.Split(path)
+
+	pdir, err := getParentDir(filesRoot, dir)
+	if err != nil {
+		if force && err == os.ErrNotExist {
+			return nil
+		}
+		return err
+	}
+
+	if force {
+		err := pdir.Unlink(name)
 		if err != nil {
-			if force && err == os.ErrNotExist {
+			if err == os.ErrNotExist {
 				return nil
 			}
-			return fmt.Errorf("parent lookup: %s", err)
-		}
-
-		if force {
-			err := pdir.Unlink(name)
-			if err != nil {
-				if err == os.ErrNotExist {
-					return nil
-				}
-				return err
-			}
-			return pdir.Flush()
-		}
-
-		// get child node by name, when the node is corrupted and nonexistent,
-		// it will return specific error.
-		child, err := pdir.Child(name)
-		if err != nil {
 			return err
 		}
-
-		dashr, _ := req.Options[recursiveOptionName].(bool)
-
-		switch child.(type) {
-		case *mfs.Directory:
-			if !dashr {
-				return fmt.Errorf("%s is a directory, use -r to remove directories", path)
-			}
-		}
-
-		err = pdir.Unlink(name)
-		if err != nil {
-			return err
-		}
-
 		return pdir.Flush()
-	},
+	}
+
+	// get child node by name, when the node is corrupted and nonexistent,
+	// it will return specific error.
+	child, err := pdir.Child(name)
+	if err != nil {
+		return err
+	}
+
+	switch child.(type) {
+	case *mfs.Directory:
+		if !dashr {
+			return fmt.Errorf("path is a directory, use -r to remove directories")
+		}
+	}
+
+	err = pdir.Unlink(name)
+	if err != nil {
+		return err
+	}
+
+	return pdir.Flush()
 }
 
 func getPrefixNew(req *cmds.Request) (cid.Builder, error) {

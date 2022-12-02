@@ -8,7 +8,7 @@ import (
 	"github.com/ipfs/go-merkledag/dagutils"
 	path "github.com/ipfs/interface-go-ipfs-core/path"
 
-	cmdenv "github.com/ipfs/go-ipfs/core/commands/cmdenv"
+	cmdenv "github.com/ipfs/kubo/core/commands/cmdenv"
 )
 
 const (
@@ -20,8 +20,9 @@ type Changes struct {
 }
 
 var ObjectDiffCmd = &cmds.Command{
+	Status: cmds.Deprecated, // https://github.com/ipfs/kubo/issues/7936
 	Helptext: cmds.HelpText{
-		Tagline: "Display the diff between two ipfs objects.",
+		Tagline: "Display the diff between two IPFS objects.",
 		ShortDescription: `
 'ipfs object diff' is a command used to show the differences between
 two IPFS objects.`,

@@ -4,15 +4,15 @@ import (
 	"context"
 
 	"github.com/libp2p/go-libp2p"
-	host "github.com/libp2p/go-libp2p-core/host"
-	peer "github.com/libp2p/go-libp2p-core/peer"
-	peerstore "github.com/libp2p/go-libp2p-core/peerstore"
-	routing "github.com/libp2p/go-libp2p-core/routing"
 	record "github.com/libp2p/go-libp2p-record"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/core/routing"
 	routedhost "github.com/libp2p/go-libp2p/p2p/host/routed"
 
-	"github.com/ipfs/go-ipfs/core/node/helpers"
-	"github.com/ipfs/go-ipfs/repo"
+	"github.com/ipfs/kubo/core/node/helpers"
+	"github.com/ipfs/kubo/repo"
 
 	"go.uber.org/fx"
 )
@@ -34,7 +34,7 @@ type P2PHostOut struct {
 	fx.Out
 
 	Host    host.Host
-	Routing BaseIpfsRouting
+	Routing routing.Routing `name:"initialrouting"`
 }
 
 func Host(mctx helpers.MetricsCtx, lc fx.Lifecycle, params P2PHostIn) (out P2PHostOut, err error) {
@@ -64,7 +64,7 @@ func Host(mctx helpers.MetricsCtx, lc fx.Lifecycle, params P2PHostIn) (out P2PHo
 		return r, err
 	}))
 
-	out.Host, err = params.HostOption(ctx, params.ID, params.Peerstore, opts...)
+	out.Host, err = params.HostOption(params.ID, params.Peerstore, opts...)
 	if err != nil {
 		return P2PHostOut{}, err
 	}

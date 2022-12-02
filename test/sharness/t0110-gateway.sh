@@ -31,9 +31,14 @@ test_expect_success "GET IPFS path succeeds" '
   curl -sfo actual "http://127.0.0.1:$port/ipfs/$HASH"
 '
 
-test_expect_success "GET IPFS path with explicit filename succeeds with proper header" "
-  curl -fo actual -D actual_headers 'http://127.0.0.1:$port/ipfs/$HASH?filename=testтест' &&
-  grep -F \"Content-Disposition: inline; filename*=UTF-8''test%D1%82%D0%B5%D1%81%D1%82\" actual_headers
+test_expect_success "GET IPFS path with explicit ?filename succeeds with proper header" "
+  curl -fo actual -D actual_headers 'http://127.0.0.1:$port/ipfs/$HASH?filename=testтест.pdf' &&
+  grep -F 'Content-Disposition: inline; filename=\"test____.pdf\"; filename*=UTF-8'\'\''test%D1%82%D0%B5%D1%81%D1%82.pdf' actual_headers
+"
+
+test_expect_success "GET IPFS path with explicit ?filename and &download=true succeeds with proper header" "
+  curl -fo actual -D actual_headers 'http://127.0.0.1:$port/ipfs/$HASH?filename=testтест.mp4&download=true' &&
+  grep -F 'Content-Disposition: attachment; filename=\"test____.mp4\"; filename*=UTF-8'\'\''test%D1%82%D0%B5%D1%81%D1%82.mp4' actual_headers
 "
 
 # https://github.com/ipfs/go-ipfs/issues/4025#issuecomment-342250616
@@ -49,8 +54,9 @@ test_expect_success "GET IPFS path output looks good" '
 '
 
 test_expect_success "GET IPFS directory path succeeds" '
-  mkdir dir &&
+  mkdir -p dir/dirwithindex &&
   echo "12345" >dir/test &&
+  echo "hello i am a webpage" >dir/dirwithindex/index.html &&
   ipfs add -r -q dir >actual &&
   HASH2=$(tail -n 1 actual) &&
   curl -sf "http://127.0.0.1:$port/ipfs/$HASH2"
@@ -64,8 +70,55 @@ test_expect_success "GET IPFS directory file output looks good" '
   test_cmp dir/test actual
 '
 
-test_expect_success "GET IPFS nonexistent file returns code expected (404)" '
+test_expect_success "GET IPFS directory with index.html returns redirect to add trailing slash" "
+  curl -sI -o response_without_slash \"http://127.0.0.1:$port/ipfs/$HASH2/dirwithindex?query=to-remember\"  &&
+  test_should_contain \"HTTP/1.1 301 Moved Permanently\" response_without_slash &&
+  test_should_contain \"Location: /ipfs/$HASH2/dirwithindex/?query=to-remember\" response_without_slash
+"
+
+# This enables go get to parse go-import meta tags from index.html files stored in IPFS
+# https://github.com/ipfs/kubo/pull/3963
+test_expect_success "GET IPFS directory with index.html and no trailing slash returns expected output when go-get is passed" "
+  curl -s -o response_with_slash \"http://127.0.0.1:$port/ipfs/$HASH2/dirwithindex?go-get=1\"  &&
+  test_should_contain \"hello i am a webpage\" response_with_slash
+"
+
+test_expect_success "GET IPFS directory with index.html and trailing slash returns expected output" "
+  curl -s -o response_with_slash \"http://127.0.0.1:$port/ipfs/$HASH2/dirwithindex/?query=to-remember\"  &&
+  test_should_contain \"hello i am a webpage\" response_with_slash
+"
+
+test_expect_success "GET IPFS nonexistent file returns 404 (Not Found)" '
   test_curl_resp_http_code "http://127.0.0.1:$port/ipfs/$HASH2/pleaseDontAddMe" "HTTP/1.1 404 Not Found"
+'
+
+test_expect_success "GET IPFS invalid CID returns 400 (Bad Request)" '
+  test_curl_resp_http_code "http://127.0.0.1:$port/ipfs/QmInvalid/pleaseDontAddMe" "HTTP/1.1 400 Bad Request"
+'
+
+# https://github.com/ipfs/go-ipfs/issues/8230
+test_expect_success "GET IPFS inlined zero-length data object returns ok code (200)" '
+  curl -sD - "http://127.0.0.1:$port/ipfs/bafkqaaa" > empty_ok_response &&
+  test_should_contain "HTTP/1.1 200 OK" empty_ok_response &&
+  test_should_contain "Content-Length: 0" empty_ok_response
+'
+
+# https://github.com/ipfs/kubo/issues/9238
+test_expect_success "GET IPFS inlined zero-length data object with byte range returns ok code (200)" '
+  curl -sD - "http://127.0.0.1:$port/ipfs/bafkqaaa" -H "Range: bytes=0-1048575" > empty_ok_response &&
+  test_should_contain "HTTP/1.1 200 OK" empty_ok_response &&
+  test_should_contain "Content-Length: 0" empty_ok_response &&
+  test_should_contain "Content-Type: text/plain" empty_ok_response
+'
+
+test_expect_success "GET /ipfs/ipfs/{cid} returns redirect to the valid path" '
+  curl -sD - "http://127.0.0.1:$port/ipfs/ipfs/bafkqaaa?query=to-remember" > response_with_double_ipfs_ns &&
+  test_should_contain "<meta http-equiv=\"refresh\" content=\"10;url=/ipfs/bafkqaaa?query=to-remember\" />" response_with_double_ipfs_ns &&
+  test_should_contain "<link rel=\"canonical\" href=\"/ipfs/bafkqaaa?query=to-remember\" />" response_with_double_ipfs_ns
+'
+
+test_expect_success "GET invalid IPNS root returns 400 (Bad Request)" '
+  test_curl_resp_http_code "http://127.0.0.1:$port/ipns/QmInvalid/pleaseDontAddMe" "HTTP/1.1 400 Bad Request"
 '
 
 test_expect_failure "GET IPNS path succeeds" '
@@ -77,6 +130,13 @@ test_expect_failure "GET IPNS path succeeds" '
 
 test_expect_failure "GET IPNS path output looks good" '
   test_cmp expected actual
+'
+
+test_expect_success "GET /ipfs/ipns/{peerid} returns redirect to the valid path" '
+  PEERID=$(ipfs config Identity.PeerID) &&
+  curl -sD - "http://127.0.0.1:$port/ipfs/ipns/${PEERID}?query=to-remember" > response_with_ipfs_ipns_ns &&
+  test_should_contain "<meta http-equiv=\"refresh\" content=\"10;url=/ipns/${PEERID}?query=to-remember\" />" response_with_ipfs_ipns_ns &&
+  test_should_contain "<link rel=\"canonical\" href=\"/ipns/${PEERID}?query=to-remember\" />" response_with_ipfs_ipns_ns
 '
 
 test_expect_success "GET invalid IPFS path errors" '
@@ -127,11 +187,24 @@ test_expect_success "test failure conditions of mutex pprof endpoint" '
     test_must_fail curl -f -X GET "http://127.0.0.1:$apiport/debug/pprof-mutex/?fraction=-1"
 '
 
+curl_pprofblock() {
+  curl -f -X POST "http://127.0.0.1:$apiport/debug/pprof-block/?rate=$1"
+}
+
+test_expect_success "set blocking profiler rate for pprof (0 so it doesn't enable)" '
+  curl_pprofblock 0
+'
+
+test_expect_success "test failure conditions of mutex block endpoint" '
+  test_must_fail curl_pprofblock &&
+  test_must_fail curl_pprofblock that_is_string &&
+  test_must_fail curl -f -X GET "http://127.0.0.1:$apiport/debug/pprof-block/?rate=0"
+'
 
 test_expect_success "setup index hash" '
   mkdir index &&
   echo "<p></p>" > index/index.html &&
-  INDEXHASH=$(ipfs add -q -r index | tail -n1)
+  INDEXHASH=$(ipfs add -Q -r index)
   echo index: $INDEXHASH
 '
 
@@ -170,6 +243,8 @@ for cmd in add  \
            block/put \
            bootstrap \
            config \
+           dag/put \
+           dag/import \
            dht \
            diag \
            id \
@@ -211,7 +286,7 @@ test_expect_success "try fetching it from gateway" '
 
 test_expect_success "Add compact blocks" '
   ipfs block put ../t0110-gateway-data/foo.block &&
-  FOO2_HASH=$(ipfs block put ../t0110-gateway-data/foofoo.block) &&
+  FOO2_HASH=$(ipfs block put --cid-codec=dag-pb ../t0110-gateway-data/foofoo.block) &&
   printf "foofoo" > expected
 '
 
@@ -220,10 +295,25 @@ test_expect_success "GET compact blocks succeeds" '
   test_cmp expected actual
 '
 
+test_expect_success "Verify gateway file" '
+  cat "$IPFS_PATH/gateway" > gateway_file_actual &&
+  echo -n "http://$GWAY_ADDR" > gateway_daemon_actual &&
+  test_cmp gateway_daemon_actual gateway_file_actual
+'
+
 test_kill_ipfs_daemon
 
-
 GWPORT=32563
+
+test_expect_success "Verify gateway file diallable while on unspecified" '
+  ipfs config Addresses.Gateway /ip4/0.0.0.0/tcp/$GWPORT &&
+  test_launch_ipfs_daemon &&
+  cat "$IPFS_PATH/gateway" > gateway_file_actual &&
+  echo -n "http://127.0.0.1:$GWPORT" > gateway_file_expected &&
+  test_cmp gateway_file_expected gateway_file_actual
+'
+
+test_kill_ipfs_daemon
 
 test_expect_success "set up iptb testbed" '
   iptb testbed create -type localipfs -count 5 -force -init &&

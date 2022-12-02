@@ -4,22 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"runtime/debug"
 
-	version "github.com/ipfs/go-ipfs"
-	fsrepo "github.com/ipfs/go-ipfs/repo/fsrepo"
+	version "github.com/ipfs/kubo"
 
 	cmds "github.com/ipfs/go-ipfs-cmds"
 )
-
-type VersionOutput struct {
-	Version string
-	Commit  string
-	Repo    string
-	System  string
-	Golang  string
-}
 
 const (
 	versionNumberOptionName = "number"
@@ -30,8 +20,8 @@ const (
 
 var VersionCmd = &cmds.Command{
 	Helptext: cmds.HelpText{
-		Tagline:          "Show ipfs version information.",
-		ShortDescription: "Returns the current version of ipfs and exits.",
+		Tagline:          "Show IPFS version information.",
+		ShortDescription: "Returns the current version of IPFS and exits.",
 	},
 	Subcommands: map[string]*cmds.Command{
 		"deps": depsVersionCommand,
@@ -43,24 +33,20 @@ var VersionCmd = &cmds.Command{
 		cmds.BoolOption(versionRepoOptionName, "Show repo version."),
 		cmds.BoolOption(versionAllOptionName, "Show all version information"),
 	},
+	// must be permitted to run before init
+	Extra: CreateCmdExtras(SetDoesNotUseRepo(true), SetDoesNotUseConfigAsInput(true)),
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
-		return cmds.EmitOnce(res, &VersionOutput{
-			Version: version.CurrentVersionNumber,
-			Commit:  version.CurrentCommit,
-			Repo:    fmt.Sprint(fsrepo.RepoVersion),
-			System:  runtime.GOARCH + "/" + runtime.GOOS, //TODO: Precise version here
-			Golang:  runtime.Version(),
-		})
+		return cmds.EmitOnce(res, version.GetVersionInfo())
 	},
 	Encoders: cmds.EncoderMap{
-		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, version *VersionOutput) error {
+		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, version *version.VersionInfo) error {
 			all, _ := req.Options[versionAllOptionName].(bool)
 			if all {
 				ver := version.Version
 				if version.Commit != "" {
 					ver += "-" + version.Commit
 				}
-				out := fmt.Sprintf("go-ipfs version: %s\n"+
+				out := fmt.Sprintf("Kubo version: %s\n"+
 					"Repo version: %s\nSystem version: %s\nGolang version: %s\n",
 					ver, version.Repo, version.System, version.Golang)
 				fmt.Fprint(w, out)
@@ -85,11 +71,11 @@ var VersionCmd = &cmds.Command{
 				return nil
 			}
 
-			fmt.Fprint(w, fmt.Sprintf("ipfs version %s%s\n", version.Version, commitTxt))
+			fmt.Fprintf(w, "ipfs version %s%s\n", version.Version, commitTxt)
 			return nil
 		}),
 	},
-	Type: VersionOutput{},
+	Type: version.VersionInfo{},
 }
 
 type Dependency struct {
@@ -103,7 +89,7 @@ const pkgVersionFmt = "%s@%s"
 
 var depsVersionCommand = &cmds.Command{
 	Helptext: cmds.HelpText{
-		Tagline: "Shows information about dependencies used for build",
+		Tagline: "Shows information about dependencies used for build.",
 		ShortDescription: `
 Print out all dependencies and their versions.`,
 	},

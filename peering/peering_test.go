@@ -6,21 +6,22 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p"
-	connmgr "github.com/libp2p/go-libp2p-connmgr"
-	"github.com/libp2p/go-libp2p-core/host"
-	"github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 
 	"github.com/stretchr/testify/require"
 )
 
-func newNode(ctx context.Context, t *testing.T) host.Host {
+func newNode(t *testing.T) host.Host {
+	cm, err := connmgr.NewConnManager(1, 100, connmgr.WithGracePeriod(0))
+	require.NoError(t, err)
 	h, err := libp2p.New(
-		ctx,
 		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		// We'd like to set the connection manager low water to 0, but
 		// that would disable the connection manager.
-		libp2p.ConnectionManager(connmgr.NewConnManager(1, 100, 0)),
+		libp2p.ConnectionManager(cm),
 	)
 	require.NoError(t, err)
 	return h
@@ -30,15 +31,16 @@ func TestPeeringService(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h1 := newNode(ctx, t)
+	h1 := newNode(t)
 	ps1 := NewPeeringService(h1)
 
-	h2 := newNode(ctx, t)
-	h3 := newNode(ctx, t)
-	h4 := newNode(ctx, t)
+	h2 := newNode(t)
+	h3 := newNode(t)
+	h4 := newNode(t)
 
 	// peer 1 -> 2
 	ps1.AddPeer(peer.AddrInfo{ID: h2.ID(), Addrs: h2.Addrs()})
+	require.Contains(t, ps1.ListPeers(), peer.AddrInfo{ID: h2.ID(), Addrs: h2.Addrs()})
 
 	// We haven't started so we shouldn't have any peers.
 	require.Never(t, func() bool {
@@ -57,14 +59,16 @@ func TestPeeringService(t *testing.T) {
 	require.NoError(t, ps1.Start())
 
 	// We should eventually connect.
+	t.Logf("waiting for h1 to connect to h2")
 	require.Eventually(t, func() bool {
 		return h1.Network().Connectedness(h2.ID()) == network.Connected
 	}, 30*time.Second, 10*time.Millisecond)
 
-	// Now explicitly connect to p3.
+	// Now explicitly connect to h3.
+	t.Logf("waiting for h1's connection to h3 to work")
 	require.NoError(t, h1.Connect(ctx, peer.AddrInfo{ID: h3.ID(), Addrs: h3.Addrs()}))
 	require.Eventually(t, func() bool {
-		return h1.Network().Connectedness(h2.ID()) == network.Connected
+		return h1.Network().Connectedness(h3.ID()) == network.Connected
 	}, 30*time.Second, 100*time.Millisecond)
 
 	require.Len(t, h1.Network().Peers(), 3)
@@ -72,7 +76,8 @@ func TestPeeringService(t *testing.T) {
 	// force a disconnect
 	h1.ConnManager().TrimOpenConns(ctx)
 
-	// Should disconnect from p3.
+	// Should disconnect from h3.
+	t.Logf("waiting for h1's connection to h3 to disconnect")
 	require.Eventually(t, func() bool {
 		return h1.Network().Connectedness(h3.ID()) != network.Connected
 	}, 5*time.Second, 10*time.Millisecond)
@@ -88,9 +93,10 @@ func TestPeeringService(t *testing.T) {
 	h2.ConnManager().TrimOpenConns(ctx)
 
 	// All conns to peer should eventually close.
+	t.Logf("waiting for all connections to close")
 	for _, c := range conns {
 		require.Eventually(t, func() bool {
-			s, err := c.NewStream()
+			s, err := c.NewStream(context.Background())
 			if s != nil {
 				_ = s.Reset()
 			}
@@ -105,23 +111,29 @@ func TestPeeringService(t *testing.T) {
 
 	// Unprotect 2 from 1.
 	ps1.RemovePeer(h2.ID())
+	require.NotContains(t, ps1.ListPeers(), peer.AddrInfo{ID: h2.ID(), Addrs: h2.Addrs()})
 
 	// Trim connections.
 	h1.ConnManager().TrimOpenConns(ctx)
 
 	// Should disconnect
+	t.Logf("waiting for h1 to disconnect from h2")
 	require.Eventually(t, func() bool {
 		return h1.Network().Connectedness(h2.ID()) != network.Connected
 	}, 5*time.Second, 10*time.Millisecond)
 
 	// Should never reconnect.
+	t.Logf("ensuring h1 is not connected to h2 again")
 	require.Never(t, func() bool {
 		return h1.Network().Connectedness(h2.ID()) == network.Connected
 	}, 20*time.Second, 1*time.Second)
 
 	// Until added back
 	ps1.AddPeer(peer.AddrInfo{ID: h2.ID(), Addrs: h2.Addrs()})
+	require.Contains(t, ps1.ListPeers(), peer.AddrInfo{ID: h2.ID(), Addrs: h2.Addrs()})
 	ps1.AddPeer(peer.AddrInfo{ID: h3.ID(), Addrs: h3.Addrs()})
+	require.Contains(t, ps1.ListPeers(), peer.AddrInfo{ID: h3.ID(), Addrs: h3.Addrs()})
+	t.Logf("wait for h1 to connect to h2 and h3 again")
 	require.Eventually(t, func() bool {
 		return h1.Network().Connectedness(h2.ID()) == network.Connected
 	}, 30*time.Second, 1*time.Second)
@@ -135,7 +147,9 @@ func TestPeeringService(t *testing.T) {
 
 	// Adding and removing should work after stopping.
 	ps1.AddPeer(peer.AddrInfo{ID: h4.ID(), Addrs: h4.Addrs()})
+	require.Contains(t, ps1.ListPeers(), peer.AddrInfo{ID: h4.ID(), Addrs: h4.Addrs()})
 	ps1.RemovePeer(h2.ID())
+	require.NotContains(t, ps1.ListPeers(), peer.AddrInfo{ID: h2.ID(), Addrs: h2.Addrs()})
 }
 
 func TestNextBackoff(t *testing.T) {
